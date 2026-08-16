@@ -1,6 +1,6 @@
 # GitCompanion.nvim
 
-A lightweight, terminal-native Git interface floating window for Neovim. Effortlessly inspect diffs, manage branches, stage modified files, manage stashes, and handle merges or commits without leaving your editor.
+A lightweight, terminal-native Git interface floating window for Neovim. Inspect diffs, manage branches, stage modified files, manage stashes, and handle merges or commits without leaving your neovim editor.
 
 ![Branch View & Code Diffs](assets/branches.png)
 
