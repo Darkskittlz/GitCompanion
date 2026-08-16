@@ -23,7 +23,7 @@ A lightweight, terminal-native Git interface floating window for Neovim. Effortl
 
 View staged/unstaged files and preview line diffs in real time.
 
-![Files Changed View](assets/files_changed.png)
+![Files Changed View](assets/filesChanged.png)
 
 ---
 
@@ -39,7 +39,7 @@ Inspect saved stash items alongside their code modifications.
 
 Dedicated floating modal to write commit titles and detailed descriptions.
 
-![Commit Dialog](assets/commit_modal.png)
+![Commit Dialog](assets/commit.png)
 
 ---
 
@@ -47,9 +47,9 @@ Dedicated floating modal to write commit titles and detailed descriptions.
 
 Create new branches or launch regular/squash merge workflows seamlessly.
 
-|              Branch Creation               |            Interactive Merging             |
-| :----------------------------------------: | :----------------------------------------: |
-| ![Create Branch](assets/create_branch.png) | ![Merge Options](assets/merge_options.png) |
+|              Branch Creation              |          Interactive Merging           |
+| :---------------------------------------: | :------------------------------------: |
+| ![Create Branch](assets/CreateBranch.png) | ![Merge Options](assets/MergeView.png) |
 
 ---
 
@@ -57,7 +57,7 @@ Create new branches or launch regular/squash merge workflows seamlessly.
 
 Press `?` inside any window to toggle the interactive cheat sheet.
 
-![Help Window](assets/help_modal.png)
+![Help Window](assets/Help.png)
 
 ---
 
