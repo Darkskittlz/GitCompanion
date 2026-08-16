@@ -198,6 +198,7 @@ local function get_changed_files(branch)
    -------------------------------------------------------------------------
    local staged_lines = run_git("git diff --cached --name-status " .. branch) or {}
    local unstaged_lines = run_git("git diff --name-status " .. branch) or {}
+   local untracked_lines = run_git("git ls-files --others --exclude-standard") or {}
 
    -------------------------------------------------------------------------
    -- Prepare data structures:
@@ -266,6 +267,15 @@ local function get_changed_files(branch)
          if p then
             add(s, p, false)
          end
+      end
+   end
+
+   -------------------------------------------------------------------------
+   -- Parse untracked lines
+   -------------------------------------------------------------------------
+   for _, line in ipairs(untracked_lines) do
+      if line and line:match("%S") then
+         add("U", line, false) -- "U" stands for Untracked
       end
    end
 
