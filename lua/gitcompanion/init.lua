@@ -1,6 +1,8 @@
 ---@diagnostic disable: undefined-global
 local M = {}
 
+-- TODO: add rename context to git commit
+
 -- Highlights
 vim.api.nvim_set_hl(0, "GitBranchCurrent", { fg = "#549afc" })
 vim.api.nvim_set_hl(0, "GitUnstaged", { fg = "#f99c67", bold = true, italic = true })
