@@ -2908,6 +2908,8 @@ function M.toggle(opts)
       })
    end
 
+   -- comment
+   --
    -- Apply keymaps to both buffers
    set_keymaps(Ui.left_buf)
    set_keymaps(Ui.right_buf)
