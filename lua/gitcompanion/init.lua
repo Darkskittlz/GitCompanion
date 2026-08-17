@@ -1,5 +1,11 @@
 ---@diagnostic disable: undefined-global
 local M = {}
+local render_diff
+local toggle_tree_node
+local render_files_tree
+local flatten_tree
+local get_changed_files
+local ns_id
 
 -- TODO: add rename context to git commit
 
@@ -186,141 +192,285 @@ local function load_stashes()
    end, raw)
 end
 
+local function format_node_text(node, indent_level)
+   local indent = string.rep("  ", indent_level)
+   if node.is_dir then
+      local icon = node.expanded and "📂 " or "📁 "
+      return indent .. icon .. node.name .. "/"
+   else
+      -- Visual indicator for staged vs unstaged
+      local icon = node.staged and "✓ " or "• "
+      return indent .. icon .. node.name
+   end
+end
+
+-- 2. Flatten tree into line entries based on expansion states
+flatten_tree = function(node, depth, result)
+   depth = depth or 0
+   result = result or {}
+
+   local keys = {}
+   for k in pairs(node.children or {}) do
+      table.insert(keys, k)
+   end
+   table.sort(keys, function(a, b)
+      local ca, cb = node.children[a], node.children[b]
+      if ca.is_dir ~= cb.is_dir then
+         return ca.is_dir
+      end
+      return ca.name < cb.name
+   end)
+
+   for _, k in ipairs(keys) do
+      local child = node.children[k]
+
+      -- CALL format_node_text HERE
+      table.insert(result, {
+         text = format_node_text(child, depth),
+         node = child,
+      })
+
+      if child.is_dir and child.expanded then
+         flatten_tree(child, depth + 1, result)
+      end
+   end
+   return result
+end
+
+local function get_tree_ns()
+   if not ns_id then
+      ns_id = vim.api.nvim_create_namespace("gitcompanion_tree_hl")
+   end
+   return ns_id
+end
+
+render_files_tree = function()
+   if not Ui.left_buf or not vim.api.nvim_buf_is_valid(Ui.left_buf) then
+      return
+   end
+
+   local ns = get_tree_ns()
+
+   vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.left_buf })
+   -- Clear previous highlights using safe namespace ID
+   vim.api.nvim_buf_clear_namespace(Ui.left_buf, ns, 0, -1)
+
+   local lines = {}
+   for _, item in ipairs(Ui.visible_tree_lines or {}) do
+      table.insert(lines, item.text)
+   end
+
+   vim.api.nvim_buf_set_lines(Ui.left_buf, 0, -1, false, lines)
+
+   -- Apply file status highlights
+   for line_idx, item in ipairs(Ui.visible_tree_lines or {}) do
+      local node = item.node
+      if node and not node.is_dir then
+         local hl_group = node.staged and "Added" or "Changed"
+         if vim.fn.hlexists("GitSignsAdd") == 1 and node.staged then
+            hl_group = "GitSignsAdd"
+         elseif vim.fn.hlexists("GitSignsChange") == 1 and not node.staged then
+            hl_group = "GitSignsChange"
+         end
+
+         vim.api.nvim_buf_add_highlight(Ui.left_buf, ns, hl_group, line_idx - 1, 0, -1)
+      elseif node and node.is_dir then
+         vim.api.nvim_buf_add_highlight(Ui.left_buf, ns, "Directory", line_idx - 1, 0, -1)
+      end
+   end
+
+   vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.left_buf })
+end
+
+toggle_tree_node = function()
+   if Ui.mode ~= "files" or not Ui.left_win or not vim.api.nvim_win_is_valid(Ui.left_win) then
+      return
+   end
+
+   -- 1. Sync cursor position
+   local cursor = vim.api.nvim_win_get_cursor(Ui.left_win)
+   Ui.selected_index = cursor[1]
+
+   -- 2. Fetch active node
+   local item = Ui.visible_tree_lines and Ui.visible_tree_lines[Ui.selected_index]
+   local node = item and item.node
+
+   -- 3. Toggle expansion if node is a directory
+   if node and node.is_dir then
+      node.expanded = not node.expanded
+
+      -- 4. Re-flatten tree and update buffer lines
+      Ui.visible_tree_lines = flatten_tree(Ui.tree_root)
+      render_files_tree()
+
+      -- 5. Restore cursor position
+      local max_line = #Ui.visible_tree_lines
+      local safe_idx = math.min(math.max(1, Ui.selected_index), max_line)
+      if safe_idx > 0 then
+         pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { safe_idx, 0 })
+      end
+
+      -- Update code preview for new selection focus
+      render_diff()
+   end
+end
+
 ---------------------------------------------------------------------------
 -- 🧩 Load list of changed files (staged + unstaged)
---  branch: optional branch or commit ref (defaults to HEAD)
 ---------------------------------------------------------------------------
-local function get_changed_files(branch)
-   branch = branch or "HEAD" -- fallback if not provided
+get_changed_files = function(branch)
+   local status_lines = vim.fn.systemlist("git status --porcelain")
+   local files = {}
 
-   -------------------------------------------------------------------------
-   -- Run Git commands:
-   --   - `git diff --cached --name-status` → staged changes
-   --   - `git diff --name-status`          → unstaged changes
-   -------------------------------------------------------------------------
-   local staged_lines = run_git("git diff --cached --name-status " .. branch) or {}
-   local unstaged_lines = run_git("git diff --name-status " .. branch) or {}
-   local untracked_lines = run_git("git ls-files --others --exclude-standard") or {}
+   for _, line in ipairs(status_lines) do
+      if #line >= 4 then
+         local staged_char = line:sub(1, 1)
+         local unstaged_char = line:sub(2, 2)
+         local path = line:sub(4):gsub("^%s+", ""):gsub('^"', ""):gsub('"$', "")
 
-   -------------------------------------------------------------------------
-   -- Prepare data structures:
-   --   index   → map of path → { value, status, staged }
-   --   results → list of all files (for ordered display)
-   -------------------------------------------------------------------------
-   local index, results = {}, {}
+         -- Staged if index column is not space or untracked (?)
+         local is_staged = staged_char ~= " " and staged_char ~= "?"
 
-   -------------------------------------------------------------------------
-   -- Helper: add(status, path, staged_flag)
-   -------------------------------------------------------------------------
-   local function add(status, path, staged_flag)
-      if not index[path] then
-         index[path] = {
+         table.insert(files, {
+            path = path,
             value = path,
-            status = status or "M",
-            staged = staged_flag or false,
-         }
-         table.insert(results, index[path])
-      else
-         -- Update staged flag and status if necessary
-         if staged_flag then
-            index[path].staged = true
-            index[path].status = status or index[path].status
+            staged = is_staged,
+            status = is_staged and staged_char or unstaged_char,
+         })
+      end
+   end
+
+   Ui.tree_root = build_tree_from_files(files)
+   Ui.visible_tree_lines = flatten_tree(Ui.tree_root)
+end
+
+local function get_diff_for_target(path)
+   if not path or path == "" then
+      return { "[No file selected]" }
+   end
+   local cmd = "git --no-pager diff HEAD -- " .. vim.fn.shellescape(path)
+   local diff_lines = vim.fn.systemlist(cmd)
+   if vim.v.shell_error == 0 and #diff_lines > 0 then
+      return diff_lines
+   end
+   return { "[No changes for " .. path .. "]" }
+end
+
+render_diff = function()
+   if not Ui or not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
+      return
+   end
+
+   vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.diff_buf })
+   vim.api.nvim_buf_clear_namespace(Ui.diff_buf, -1, 0, -1)
+
+   local out = { "" }
+
+   if Ui.mode == "files" then
+      if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
+         local cursor = vim.api.nvim_win_get_cursor(Ui.left_win)
+         Ui.selected_index = cursor[1]
+      end
+
+      local item = Ui.visible_tree_lines and Ui.visible_tree_lines[Ui.selected_index]
+      local node = item and item.node
+
+      if node then
+         if node.is_dir then
+            local child_paths = get_all_child_paths(node)
+            out = get_diff_for_paths(child_paths)
          else
-            index[path].staged = index[path].staged or false
-            index[path].status = status or index[path].status
+            out = get_diff_for_target(node.path or node.value or node.name)
          end
+      else
+         out = { "[No file selected]" }
       end
-      -- print(
-      --   "get_changed_files: file=",
-      --   path,
-      --   "status=",
-      --   status,
-      --   "staged=",
-      --   index[path].staged
-      -- )
-   end
-
-   -------------------------------------------------------------------------
-   -- Parse staged lines
-   -------------------------------------------------------------------------
-   for _, line in ipairs(staged_lines) do
-      if line and line:match("%S") then
-         -- line format: "M  path/to/file" or "A  path/to/file"
-         local s, p = line:match("^(%S+)%s+(.*)$")
-         if not s then
-            -- fallback if --name-status didn't provide status
-            s, p = "M", line
-         end
-         if p then
-            add(s, p, true)
-         end
+   elseif Ui.mode == "branches" then
+      -- Show branch diff against active HEAD
+      local branch = Ui.branches and Ui.branches[Ui.selected_index]
+      if branch then
+         local clean_branch = branch:gsub("^%*%s*", ""):gsub("%s+", "")
+         out = vim.fn.systemlist("git --no-pager diff " .. vim.fn.shellescape(clean_branch))
+      else
+         out = { "[No branch selected]" }
       end
    end
 
-   -------------------------------------------------------------------------
-   -- Parse unstaged lines
-   -------------------------------------------------------------------------
-   for _, line in ipairs(unstaged_lines) do
-      if line and line:match("%S") then
-         local s, p = line:match("^(%S+)%s+(.*)$")
-         if not s then
-            s, p = "M", line
-         end
-         if p then
-            add(s, p, false)
-         end
+   vim.api.nvim_buf_set_lines(Ui.diff_buf, 0, -1, false, out)
+   vim.api.nvim_set_option_value("filetype", "diff", { buf = Ui.diff_buf })
+
+   for i, line in ipairs(out) do
+      if line:match("^%+.*") then
+         vim.api.nvim_buf_add_highlight(Ui.diff_buf, -1, "DiffAdd", i - 1, 0, -1)
+      elseif line:match("^%-.*") then
+         vim.api.nvim_buf_add_highlight(Ui.diff_buf, -1, "DiffDelete", i - 1, 0, -1)
+      elseif line:match("^@@") then
+         vim.api.nvim_buf_add_highlight(Ui.diff_buf, -1, "DiffHeader", i - 1, 0, -1)
       end
    end
 
-   -------------------------------------------------------------------------
-   -- Parse untracked lines
-   -------------------------------------------------------------------------
-   for _, line in ipairs(untracked_lines) do
-      if line and line:match("%S") then
-         add("U", line, false) -- "U" stands for Untracked
-      end
-   end
-
-   -------------------------------------------------------------------------
-   -- Store final list
-   -------------------------------------------------------------------------
-   Ui.changed_files = results
+   vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.diff_buf })
 end
 
--- Diff preview
-local function get_diff_for_target(target)
-   if not target or target == "" then
-      return { "[No target]" }
+build_tree_from_files = function(files)
+   local root = { name = "", is_dir = true, children = {}, expanded = true }
+
+   for _, item in ipairs(files) do
+      local path = item.value or item.path or item
+      local status = item.status or "M"
+      local staged = item.staged or false
+      local parts = {}
+      for part in path:gmatch("[^/]+") do
+         table.insert(parts, part)
+      end
+
+      local current = root
+      for i, part in ipairs(parts) do
+         if i == #parts then
+            current.children[part] = current.children[part]
+                or {
+                   name = part,
+                   is_dir = false,
+                   path = path,
+                   status = status,
+                   staged = staged,
+                }
+         else
+            if not current.children[part] then
+               current.children[part] = {
+                  name = part,
+                  is_dir = true,
+                  children = {},
+                  expanded = true,
+               }
+            end
+            current = current.children[part]
+         end
+      end
    end
-   local root = git_root()
-   local cmd = string.format(
-      "git -C %s diff -- %s; echo '\n--- STAGED CHANGES ---\n'; git -C %s diff --cached -- %s",
-      vim.fn.fnameescape(root),
-      vim.fn.shellescape(target),
-      vim.fn.fnameescape(root),
-      vim.fn.shellescape(target)
-   )
-   local out = vim.fn.systemlist({ "bash", "-c", cmd })
-   if vim.v.shell_error ~= 0 or #out == 0 then
-      return { "[No changes]" }
-   end
-   return out
+   return root
 end
+
+local ns_id = vim.api.nvim_create_namespace("gitcompanion_tree_hl")
 
 ---------------------------------------------------------------------------
 -- Render the left panel (branches or changed files)
 ---------------------------------------------------------------------------
 local function render_left()
-   if not Ui.left_buf then
-      -- print("render_left: no left buffer")
+   if not Ui or not Ui.left_buf then
       return
    end
 
-   -- print("render_left: starting, mode =", Ui.mode)
-   vim.api.nvim_buf_set_option(Ui.left_buf, "modifiable", true)
+   -- Delegate directly to tree renderer for files mode
+   if Ui.mode == "files" or not (Ui.mode == "branches" or Ui.mode == "stashes") then
+      render_files_tree()
+      return -- Critical: stop execution so we don't wipe the buffer below!
+   end
 
-   local lines = {}    -- lines to write
-   local highlights = {} -- highlight info
+   vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.left_buf })
+
+   local lines = {}
+   local highlights = {}
 
    if Ui.mode == "branches" then
       load_branches()
@@ -342,45 +492,8 @@ local function render_left()
          table.insert(lines, "  " .. s)
          table.insert(highlights, { line = i, hl = "GitMsg", col = 0, length = -1 })
       end
-   else
-      -- print(
-      --   "render_left: rendering changed files, selected branch =",
-      --   Ui.branch_selected
-      -- )
-      -- print("render_left: get_changed_files call")
-      get_changed_files(Ui.branch_selected)
-      -- print(
-      --   "render_left: Ui.changed_files count =",
-      --   #Ui.changed_files
-      -- )
-      for i, f in ipairs(Ui.changed_files) do
-         local prefix = f.staged and "✅" or "💣"
-         -- print("render_left: prefix =", prefix)
-         local line = string.format(" %s %s %s", prefix, f.status or "", f.value)
-         table.insert(lines, line)
-
-         -- Highlight prefix color
-         table.insert(highlights, {
-            line = i,
-            hl = f.staged and "GitStaged" or "GitUnstaged",
-            col = 0,
-            length = #line, -- only highlight [U]/[S]
-         })
-
-         -- Highlight filename differently
-         table.insert(highlights, {
-            line = i,
-            hl = f.staged and "GitStagedFile" or "GitUnstagedFile",
-            col = 4,
-            length = #f.value,
-         })
-      end
    end
 
-   -- print(
-   --   "render_left: writing lines to buffer, line count =",
-   --   #lines
-   -- )
    vim.api.nvim_buf_set_lines(Ui.left_buf, 0, -1, false, lines)
 
    -- Apply highlights
@@ -389,8 +502,7 @@ local function render_left()
       vim.api.nvim_buf_add_highlight(Ui.left_buf, -1, h.hl, h.line - 1, h.col or 0, h.length or -1)
    end
 
-   vim.api.nvim_buf_set_option(Ui.left_buf, "modifiable", false)
-   -- print("render_left: done")
+   vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.left_buf })
 end
 
 ---------------------------------------------------------------------------
@@ -534,11 +646,46 @@ local function render_right()
 end
 
 -- Render diff panel (Code Changes)
-local function render_diff()
+-- Helper 1: Recursively collect all file paths under a directory node
+local function get_all_child_paths(node)
+   local paths = {}
+   local function collect(n)
+      if not n then
+         return
+      end
+      if n.is_dir then
+         for _, child in pairs(n.children or {}) do
+            collect(child)
+         end
+      elseif n.path then
+         table.insert(paths, n.path)
+      end
+   end
+   collect(node)
+   return paths
+end
+
+-- Helper 2: Fetch combined git diff for multiple file paths
+local function get_diff_for_paths(paths)
+   if #paths == 0 then
+      return { "[Empty directory or no changes]" }
+   end
+   local escaped = {}
+   for _, p in ipairs(paths) do
+      table.insert(escaped, vim.fn.shellescape(p))
+   end
+   local cmd = "git --no-pager diff HEAD -- " .. table.concat(escaped, " ")
+   local diff_lines = vim.fn.systemlist(cmd)
+   return (vim.v.shell_error == 0 and #diff_lines > 0) and diff_lines or { "[No changes in folder]" }
+end
+
+render_diff = function()
    if not Ui or not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
       return
    end
-   vim.api.nvim_buf_set_option(Ui.diff_buf, "modifiable", true)
+
+   -- Updated API calls replacing deprecated nvim_buf_set_option
+   vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.diff_buf })
    vim.api.nvim_buf_clear_namespace(Ui.diff_buf, -1, 0, -1)
 
    local out = { "" }
@@ -548,8 +695,23 @@ local function render_diff()
          local cursor = vim.api.nvim_win_get_cursor(Ui.left_win)
          Ui.selected_index = cursor[1]
       end
-      local sel = Ui.changed_files[Ui.selected_index]
-      out = sel and get_diff_for_target(sel.value) or { "[No file selected]" }
+
+      -- Access the active node directly from the flattened visible tree list
+      local item = Ui.visible_tree_lines and Ui.visible_tree_lines[Ui.selected_index]
+      local node = item and item.node
+
+      if node then
+         if node.is_dir then
+            -- Directory selected: aggregate diffs for all child files
+            local child_paths = get_all_child_paths(node)
+            out = get_diff_for_paths(child_paths)
+         else
+            -- Single file selected
+            out = get_diff_for_target(node.path)
+         end
+      else
+         out = { "[No file selected]" }
+      end
    elseif Ui.mode == "stashes" then
       if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
          local cursor = vim.api.nvim_win_get_cursor(Ui.left_win)
@@ -586,7 +748,7 @@ local function render_diff()
    end
 
    vim.api.nvim_buf_set_lines(Ui.diff_buf, 0, -1, false, out)
-   vim.api.nvim_buf_set_option(Ui.diff_buf, "filetype", "diff")
+   vim.api.nvim_set_option_value("filetype", "diff", { buf = Ui.diff_buf })
 
    for i, line in ipairs(out) do
       if line:match("^%+.*") then
@@ -602,7 +764,7 @@ local function render_diff()
       end
    end
 
-   vim.api.nvim_buf_set_option(Ui.diff_buf, "modifiable", false)
+   vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.diff_buf })
 end
 
 ---------------------------------------------------------------------------
@@ -1021,105 +1183,105 @@ local function toggle_mode(dir)
    focus_left()
 end
 
--- Stage or unstage the selected file
+-- Helper to gather all leaf file paths under a node recursively
+local function get_all_child_paths(node)
+   local paths = {}
+   if not node then
+      return paths
+   end
+
+   if not node.is_dir then
+      if node.path then
+         table.insert(paths, node.path)
+      end
+      return paths
+   end
+
+   for _, child in pairs(node.children or {}) do
+      if child.is_dir then
+         local sub_paths = get_all_child_paths(child)
+         for _, p in ipairs(sub_paths) do
+            table.insert(paths, p)
+         end
+      else
+         if child.path then
+            table.insert(paths, child.path)
+         end
+      end
+   end
+   return paths
+end
+
+-- Staging/Unstaging Function with Debugging
 local function stage_unstage_selected()
-   if Ui.mode ~= "files" then
-      -- print(
-      --   "stage_unstage_selected: not in files mode, exiting"
-      -- )
+   if Ui.mode ~= "files" or not Ui.left_win or not vim.api.nvim_win_is_valid(Ui.left_win) then
       return
    end
 
-   local sel = Ui.changed_files[Ui.selected_index]
-   if not sel then
-      -- print(
-      --   "stage_unstage_selected: no file selected at index",
-      --   Ui.selected_index
-      -- )
+   local cursor = vim.api.nvim_win_get_cursor(Ui.left_win)
+   Ui.selected_index = cursor[1]
+
+   local item = Ui.visible_tree_lines and Ui.visible_tree_lines[Ui.selected_index]
+   local node = item and item.node
+   if not node then
       return
    end
 
-   -- print(
-   --   "stage_unstage_selected: selected file =",
-   --   sel.value,
-   --   "staged =",
-   --   sel.staged
-   -- )
-
-   local root = git_root()
-   local staged_files = run_git("git diff --cached --name-only")
-   -- print(
-   --   "stage_unstage_selected: currently staged files:",
-   --   table.concat(staged_files, ", ")
-   -- )
-
-   local cmd
-   if vim.tbl_contains(staged_files, sel.value) then
-      -- print(
-      --   "stage_unstage_selected: file is staged, will unstage"
-      -- )
-      cmd = {
-         "git",
-         "restore",
-         "--staged",
-         root .. "/" .. sel.value,
-      }
-   else
-      -- print(
-      --   "stage_unstage_selected: file is not staged, will stage"
-      -- )
-      cmd = { "git", "add", root .. "/" .. sel.value }
+   local target_paths = node.is_dir and get_all_child_paths(node) or { node.path or node.value or node.name }
+   if #target_paths == 0 then
+      return
    end
 
-   -- Run the git command
-   local result = vim.fn.system(cmd)
-   -- print(
-   --   "stage_unstage_selected: git command executed, output:\n",
-   --   result
-   -- )
+   -- Check current staged status
+   local status_lines = vim.fn.systemlist("git status --porcelain")
+   local staged_set = {}
+   for _, line in ipairs(status_lines) do
+      if #line >= 4 then
+         local staged_char = line:sub(1, 1)
+         local path = line:sub(4):gsub("^%s+", ""):gsub('^"', ""):gsub('"$', "")
+         if staged_char ~= " " and staged_char ~= "?" then
+            staged_set[path] = true
+         end
+      end
+   end
 
-   -- Refresh changed files
-   -- print(
-   --   "stage_unstage_selected: refreshing changed files"
-   -- )
+   local all_staged = true
+   for _, path in ipairs(target_paths) do
+      if not staged_set[path] then
+         all_staged = false
+         break
+      end
+   end
+
+   -- Execute git action
+   local action = all_staged and "restore --staged -- " or "add -- "
+   local cmd = "git " .. action
+   for _, path in ipairs(target_paths) do
+      cmd = cmd .. " " .. vim.fn.shellescape(path)
+   end
+
+   vim.fn.system(cmd)
+
+   -- 1. Refresh changed files list
    get_changed_files(Ui.branch_selected)
-   -- print(
-   --   "stage_unstage_selected: Ui.changed_files after refresh:"
-   -- )
-   for i, f in ipairs(Ui.changed_files) do
-      -- print(
-      --   string.format(
-      --     "  [%d] %s staged=%s status=%s",
-      --     i,
-      --     f.value,
-      --     tostring(f.staged),
-      --     f.status or ""
-      --   )
-      -- )
+
+   -- 2. Re-flatten tree from newly updated tree_root
+   if Ui.tree_root then
+      Ui.visible_tree_lines = flatten_tree(Ui.tree_root)
    end
 
-   -- Redraw panels
-   -- print(
-   --   "stage_unstage_selected: rendering left panel"
-   -- )
-   render_left()
-   -- print(
-   --   "stage_unstage_selected: rendering right panel"
-   -- )
-   render_right()
+   -- 3. Render tree buffer
+   render_files_tree()
+
+   -- 4. Preserve cursor
+   local max_line = #(Ui.visible_tree_lines or {})
+   local safe_idx = math.min(math.max(1, Ui.selected_index), max_line)
+   if safe_idx > 0 then
+      pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { safe_idx, 0 })
+   end
+
+   -- 5. Refresh diff pane
    render_diff()
-
-   -- Highlight selected line briefly
-   vim.api.nvim_buf_add_highlight(Ui.left_buf, -1, "Visual", Ui.selected_index - 1, 0, -1)
-   vim.defer_fn(function()
-      -- print(
-      --   "stage_unstage_selected: deferred render_left"
-      -- )
-      render_left()
-   end, 100)
-
-   vim.api.nvim_win_set_cursor(Ui.left_win, { Ui.selected_index, 0 })
-   -- print("stage_unstage_selected: finished")
 end
 
 -- Discard changes for the selected file
@@ -2185,12 +2347,21 @@ function M.toggle(opts)
       vim.keymap.set("n", "<Space>", function()
          local win = vim.api.nvim_get_current_win()
          if win ~= Ui.left_win then
+            vim.notify(
+               "[Space Debug] Current window ("
+               .. tostring(win)
+               .. ") != Ui.left_win ("
+               .. tostring(Ui.left_win)
+               .. ")",
+               vim.log.levels.WARN
+            )
             return
          end
 
+         vim.notify("[Space Debug] Key pressed in left_win. Mode: " .. tostring(Ui.mode), vim.log.levels.INFO)
+
          if Ui.mode == "files" then
             stage_unstage_selected()
-            render_left()
          elseif Ui.mode == "branches" then
             checkout_branch()
          elseif Ui.mode == "stashes" then
@@ -2213,6 +2384,16 @@ function M.toggle(opts)
                end
             end
          end
+      end, { buffer = buf, noremap = true, silent = true })
+
+      -- Add Enter keymap to toggle fold expansion on directory nodes
+      vim.keymap.set("n", "<CR>", function()
+         local win = vim.api.nvim_get_current_win()
+         if win ~= Ui.left_win or Ui.mode ~= "files" then
+            return
+         end
+
+         toggle_tree_node()
       end, { buffer = buf, noremap = true, silent = true })
 
       -- Delete Action (d)
@@ -3150,8 +3331,6 @@ function M.toggle(opts)
       })
    end
 
-   -- comment
-   --
    -- Apply keymaps to both buffers
    set_keymaps(Ui.left_buf)
    set_keymaps(Ui.right_buf)
