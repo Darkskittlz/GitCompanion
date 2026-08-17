@@ -1032,7 +1032,7 @@ local function update_window_layout()
       return
    end
 
-   -- vim.notify(string.format("[DEBUG LayoutUpdate] Called with Ui.mode = %s", tostring(Ui.mode)), vim.log.levels.WARN)
+   vim.notify(string.format("[DEBUG LayoutUpdate] Called with Ui.mode = %s", tostring(Ui.mode)), vim.log.levels.WARN)
 
    local ui = vim.api.nvim_list_uis()[1]
    local editor_w = ui and ui.width or vim.o.columns
@@ -1056,14 +1056,14 @@ local function update_window_layout()
 
    local diff_row = 2
 
-   -- vim.notify(
-   --    string.format(
-   --       "[DEBUG LayoutUpdate] Mode: %s | right_win Valid: %s",
-   --       tostring(Ui.mode),
-   --       tostring(Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win))
-   --    ),
-   --    vim.log.levels.WARN
-   -- )
+   vim.notify(
+      string.format(
+         "[DEBUG LayoutUpdate] Mode: %s | right_win Valid: %s",
+         tostring(Ui.mode),
+         tostring(Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win))
+      ),
+      vim.log.levels.WARN
+   )
 
    if Ui.mode == "branches" then
       local diff_h = math.max(log_row - diff_row - 2, 1)
@@ -1567,14 +1567,14 @@ function M.toggle(opts)
    end
    Ui.selected_index = 1
 
-   -- vim.notify(
-   --    string.format(
-   --       "[DEBUG Toggle Init] Mode: %s | Changed files: %d",
-   --       tostring(Ui.mode),
-   --       Ui.changed_files and #Ui.changed_files or 0
-   --    ),
-   --    vim.log.levels.INFO
-   -- )
+   vim.notify(
+      string.format(
+         "[DEBUG Toggle Init] Mode: %s | Changed files: %d",
+         tostring(Ui.mode),
+         Ui.changed_files and #Ui.changed_files or 0
+      ),
+      vim.log.levels.INFO
+   )
 
    if not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
       Ui.diff_buf = vim.api.nvim_create_buf(false, true)
@@ -1624,17 +1624,17 @@ function M.toggle(opts)
       diff_h = math.max(lower_row - diff_row - 2, 1)
    end
 
-   -- vim.notify(
-   -- 	string.format(
-   -- 		"[GitCompanion Toggle] Mode: %s | editor_h: %d | available_h: %d | help_row: %d | diff_h: %d",
-   -- 		tostring(Ui.mode),
-   -- 		editor_h,
-   -- 		available_h,
-   -- 		help_row,
-   -- 		diff_h
-   -- 	),
-   -- 	vim.log.levels.WARN
-   -- )
+   vim.notify(
+      string.format(
+         "[GitCompanion Toggle] Mode: %s | editor_h: %d | available_h: %d | help_row: %d | diff_h: %d",
+         tostring(Ui.mode),
+         editor_h,
+         available_h,
+         help_row,
+         diff_h
+      ),
+      vim.log.levels.WARN
+   )
 
    -- 3. Open Floating Windows
    Ui.diff_win = vim.api.nvim_open_win(Ui.diff_buf, false, {
@@ -1651,16 +1651,16 @@ function M.toggle(opts)
    })
 
    if Ui.mode == "branches" then
-      -- vim.notify(
-      --    string.format(
-      --       "[DEBUG Creating Right Win] Mode: %s | right_buf Valid: %s | log_row: %d | log_h: %d",
-      --       tostring(Ui.mode),
-      --       tostring(Ui.right_buf and vim.api.nvim_buf_is_valid(Ui.right_buf)),
-      --       log_row,
-      --       log_h
-      --    ),
-      --    vim.log.levels.WARN
-      -- )
+      vim.notify(
+         string.format(
+            "[DEBUG Creating Right Win] Mode: %s | right_buf Valid: %s | log_row: %d | log_h: %d",
+            tostring(Ui.mode),
+            tostring(Ui.right_buf and vim.api.nvim_buf_is_valid(Ui.right_buf)),
+            log_row,
+            log_h
+         ),
+         vim.log.levels.WARN
+      )
       Ui.right_win = vim.api.nvim_open_win(Ui.right_buf, false, {
          relative = "editor",
          width = w,
@@ -1674,14 +1674,14 @@ function M.toggle(opts)
          zindex = 10,
       })
 
-      -- vim.notify(
-      --    string.format(
-      --       "[DEBUG Right Win Result] right_win ID: %s | Is Valid: %s",
-      --       tostring(Ui.right_win),
-      --       tostring(Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win))
-      --    ),
-      --    vim.log.levels.WARN
-      -- )
+      vim.notify(
+         string.format(
+            "[DEBUG Right Win Result] right_win ID: %s | Is Valid: %s",
+            tostring(Ui.right_win),
+            tostring(Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win))
+         ),
+         vim.log.levels.WARN
+      )
 
       Ui.left_win = vim.api.nvim_open_win(Ui.left_buf, true, {
          relative = "editor",
