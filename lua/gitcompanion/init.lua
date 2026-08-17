@@ -609,6 +609,11 @@ end
 -- Refresh UI on close
 ---------------------------------------------------------------------------
 local function refresh_ui()
+	-- 1. Sync window visibility & dimensions with current Ui.mode
+	if type(update_window_layout) == "function" then
+		update_window_layout()
+	end
+
 	-- Ensure Ui.selected_index is valid after switching to branches view
 	if Ui.mode == "branches" then
 		local total_branches = #Ui.branches
@@ -1371,6 +1376,26 @@ function M.toggle(opts)
 	-- 1. Buffer Initialization
 	Ui = Ui or {}
 
+	if type(get_changed_files) == "function" then
+		get_changed_files()
+	end
+	if type(load_branches) == "function" then
+		load_branches()
+	end
+
+	-- 2. Determine Default Mode
+	-- If no active mode is set, check if there are changed files:
+	-- - Has changed files -> default to "files"
+	-- - No changed files  -> default to "branches"
+	if not Ui.mode then
+		if Ui.changed_files and #Ui.changed_files > 0 then
+			Ui.mode = "files"
+		else
+			Ui.mode = "branches"
+		end
+	end
+	Ui.selected_index = 1
+
 	if not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
 		Ui.diff_buf = vim.api.nvim_create_buf(false, true)
 	end
@@ -1385,12 +1410,11 @@ function M.toggle(opts)
 	end
 
 	for _, buf in ipairs({ Ui.left_buf, Ui.right_buf, Ui.diff_buf, Ui.help_buf }) do
-		vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
-		vim.api.nvim_buf_set_option(buf, "bufhidden", "wipe")
-		vim.api.nvim_buf_set_option(buf, "modifiable", true)
-	end
+		vim.bo[buf].buftype = "nofile"
+		vim.bo[buf].bufhidden = "hide" -- Keep buffers alive across toggles
+		vim.bo[buf].modifiable = true
+	end -- 2. Screen Dimensions & Row Offsets
 
-	-- 2. Screen Dimensions & Row Offsets
 	local ui = vim.api.nvim_list_uis()[1]
 	local editor_w = ui and ui.width or vim.o.columns
 	local editor_h = ui and ui.height or vim.o.lines
