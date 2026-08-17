@@ -2811,22 +2811,24 @@ function M.toggle(opts)
 							if exit_code == 0 then
 								print("✅ Created new branch '" .. new_branch .. "' from '" .. current_branch .. "'")
 
-								-- 1. Update internal selected branch state
-								Ui.branch_selected = new_branch
+								-- 1. Re-query local branches so Ui.branches array updates
+								Ui.branches = vim.fn.systemlist("git branch --format='%(refname:short)'")
 
-								-- 2. Trigger the refresh/re-render function for GitCompanion
-								if type(M.refresh_branches) == "function" then
-									M.refresh_branches()
-								elseif type(M.render_branches) == "function" then
-									M.render_branches()
-								elseif type(M.refresh) == "function" then
-									M.refresh()
+								-- 2. Set index to point to the newly created branch
+								for idx, b in ipairs(Ui.branches) do
+									if b == new_branch then
+										Ui.selected_index = idx
+										break
+									end
 								end
+
+								-- 3. Trigger UI re-render
+								refresh_ui()
 							else
 								print(" Failed to create branch '" .. new_branch .. "'")
 							end
 
-							-- 3. Refocus back to the branches floating window
+							-- 4. Refocus back to the branches window
 							if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
 								vim.api.nvim_set_current_win(Ui.left_win)
 							end
