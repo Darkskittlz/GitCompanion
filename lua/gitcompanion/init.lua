@@ -2810,20 +2810,25 @@ function M.toggle(opts)
 
 							if exit_code == 0 then
 								print("✅ Created new branch '" .. new_branch .. "' from '" .. current_branch .. "'")
+
+								-- 1. Update internal selected branch state
+								Ui.branch_selected = new_branch
+
+								-- 2. Trigger the refresh/re-render function for GitCompanion
+								if type(M.refresh_branches) == "function" then
+									M.refresh_branches()
+								elseif type(M.render_branches) == "function" then
+									M.render_branches()
+								elseif type(M.refresh) == "function" then
+									M.refresh()
+								end
 							else
 								print(" Failed to create branch '" .. new_branch .. "'")
 							end
 
-							-- Focus back to the branches floating window
+							-- 3. Refocus back to the branches floating window
 							if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
 								vim.api.nvim_set_current_win(Ui.left_win)
-							end
-
-							-- Optional: trigger UI refresh to display the newly created branch
-							if type(M.refresh) == "function" then
-								M.refresh()
-							elseif type(update_window_layout) == "function" then
-								update_window_layout()
 							end
 						end)
 					end,
