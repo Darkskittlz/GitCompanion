@@ -710,6 +710,7 @@ local function show_floating_pair(stdout_lines, stderr_lines)
    save_active_window()
 
    local ui = vim.api.nvim_list_uis()[1]
+   local editor_h = ui.height
    local width = math.min(80, ui.width - 4)
 
    -- Calculate window heights
@@ -724,7 +725,7 @@ local function show_floating_pair(stdout_lines, stderr_lines)
    -- Create and show the output window (stdout)
    local buf_out = vim.api.nvim_create_buf(false, true)
    vim.api.nvim_buf_set_lines(buf_out, 0, -1, false, stdout_lines)
-   vim.api.nvim_buf_set_option(buf_out, "modifiable", false)
+   vim.api.nvim_set_option_value("modifiable", false, { buf = buf_out })
 
    -- Apply a highlight group to colorize the output window (stdout)
    vim.api.nvim_buf_add_highlight(buf_out, -1, "GitOutput", 0, 0, -1)
@@ -747,7 +748,7 @@ local function show_floating_pair(stdout_lines, stderr_lines)
    -- Create and show the error window (stderr)
    local buf_err = vim.api.nvim_create_buf(false, true)
    vim.api.nvim_buf_set_lines(buf_err, 0, -1, false, stderr_lines)
-   vim.api.nvim_buf_set_option(buf_err, "modifiable", false)
+   vim.api.nvim_set_option_value("modifiable", false, { buf = buf_err })
 
    vim.api.nvim_buf_add_highlight(buf_err, -1, "GitError", 0, 0, -1)
 
@@ -767,14 +768,13 @@ local function show_floating_pair(stdout_lines, stderr_lines)
    floating_windows.stderr = win_err -- Store reference to error window
 
    -- H/L navigation between floating windows
-   -- We only set the keymap once for both windows
    vim.keymap.set("n", "H", function()
       if floating_windows.stdout and vim.api.nvim_win_is_valid(floating_windows.stdout) then
          vim.api.nvim_set_current_win(floating_windows.stdout)
       elseif floating_windows.stderr and vim.api.nvim_win_is_valid(floating_windows.stderr) then
          vim.api.nvim_set_current_win(floating_windows.stderr)
       end
-   end, { nowait = true, silent = true })
+   end, { buffer = buf_out, nowait = true, silent = true })
 
    vim.keymap.set("n", "L", function()
       if floating_windows.stderr and vim.api.nvim_win_is_valid(floating_windows.stderr) then
@@ -782,14 +782,14 @@ local function show_floating_pair(stdout_lines, stderr_lines)
       elseif floating_windows.stdout and vim.api.nvim_win_is_valid(floating_windows.stdout) then
          vim.api.nvim_set_current_win(floating_windows.stdout)
       end
-   end, { nowait = true, silent = true })
+   end, { buffer = buf_out, nowait = true, silent = true })
 
    -- Bind 'q' to close floating windows and return to branches view
    vim.keymap.set("n", "q", function()
       close_floating()
       Ui.mode = "branches" -- Return to branches view after closing
       refresh_ui()
-   end, { nowait = true, silent = true })
+   end, { buffer = buf_out, nowait = true, silent = true })
 end
 
 ---------------------------------------------------------------------------
