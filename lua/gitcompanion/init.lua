@@ -7,6 +7,8 @@ local flatten_tree
 local get_changed_files
 local ns_id
 
+-- TODO: Create Merge Conflict Resolver
+
 -- Highlights
 vim.api.nvim_set_hl(0, "GitBranchCurrent", { fg = "#549afc" })
 vim.api.nvim_set_hl(0, "GitUnstaged", { fg = "#f99c67", bold = true, italic = true })
