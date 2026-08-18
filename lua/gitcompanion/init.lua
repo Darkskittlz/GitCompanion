@@ -1830,7 +1830,7 @@ function M.toggle(opts)
       vim.api.nvim_buf_set_option(buf, "modifiable", false)
 
       local ui = vim.api.nvim_list_uis()[1]
-      local width = 60
+      local width = 75
       local height = #lines
       local row = math.floor((ui.height - height) / 2)
       local col = math.floor((ui.width - width) / 2)
