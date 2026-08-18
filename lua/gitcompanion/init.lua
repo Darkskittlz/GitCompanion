@@ -2287,7 +2287,6 @@ function M.toggle(opts)
 				end
 			end
 		end, { noremap = true, silent = true })
-		-- comment
 
 		-- Apply Action (<Space>)
 		vim.keymap.set("n", "<Space>", function()
