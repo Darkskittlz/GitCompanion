@@ -1632,7 +1632,6 @@ function M.toggle(opts)
       diff_h = math.max(lower_row - diff_row - 2, 1)
    end
 
-   -- comment
    -- 4. Clean up stale window references before opening
    for _, win_key in ipairs({ "left_win", "right_win", "help_win" }) do
       if Ui[win_key] and vim.api.nvim_win_is_valid(Ui[win_key]) then
