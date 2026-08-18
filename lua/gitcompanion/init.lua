@@ -8,6 +8,8 @@ local get_changed_files
 local ns_id
 
 -- TODO: add rename context to git commit
+-- TODO: fix drop files from files changed view via d keymap
+-- TODO Fix commits float not showing at times
 
 -- Highlights
 vim.api.nvim_set_hl(0, "GitBranchCurrent", { fg = "#549afc" })
@@ -1027,13 +1029,12 @@ local function init_ui()
    focus_left()
 end
 
-local function update_window_layout()
+function update_window_layout()
    if not Ui or not Ui.diff_win or not vim.api.nvim_win_is_valid(Ui.diff_win) then
       return
    end
 
-   vim.notify(string.format("[DEBUG LayoutUpdate] Called with Ui.mode = %s", tostring(Ui.mode)), vim.log.levels.WARN)
-
+   -- 1. Recalculate layout rows & heights
    local ui = vim.api.nvim_list_uis()[1]
    local editor_w = ui and ui.width or vim.o.columns
    local editor_h = ui and ui.height or vim.o.lines
@@ -1053,96 +1054,78 @@ local function update_window_layout()
    local branch_row = help_row - branch_h - 2
    local log_row = branch_row - log_h - 2
    local lower_row = help_row - lower_h - 2
-
    local diff_row = 2
 
-   vim.notify(
-      string.format(
-         "[DEBUG LayoutUpdate] Mode: %s | right_win Valid: %s",
-         tostring(Ui.mode),
-         tostring(Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win))
-      ),
-      vim.log.levels.WARN
-   )
-
+   local diff_h
    if Ui.mode == "branches" then
-      local diff_h = math.max(log_row - diff_row - 2, 1)
+      diff_h = math.max(log_row - diff_row - 2, 1)
+   else
+      diff_h = math.max(lower_row - diff_row - 2, 1)
+   end
 
-      -- Configure & display the Commit Log window (Ui.right_win)
-      if Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win) then
-         vim.api.nvim_win_set_config(Ui.right_win, {
+   -- 2. Update Diff Window Size
+   vim.api.nvim_win_set_config(Ui.diff_win, {
+      relative = "editor",
+      width = w,
+      height = diff_h,
+      row = diff_row,
+      col = col,
+   })
+
+   -- 3. Handle Right Win (Commit Log) Visibility Based on Mode
+   if Ui.mode == "branches" then
+      if not Ui.right_win or not vim.api.nvim_win_is_valid(Ui.right_win) then
+         Ui.right_win = vim.api.nvim_open_win(Ui.right_buf, false, {
             relative = "editor",
-            hide = false,
-            row = log_row,
-            col = col,
             width = w,
             height = log_h,
+            row = log_row,
+            col = col,
+            style = "minimal",
+            border = "rounded",
             title = " Commit Log ",
             title_pos = "center",
+            zindex = 10,
          })
-      end
-
-      -- Configure & display Git Branches window (Ui.left_win)
-      if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
-         vim.api.nvim_win_set_config(Ui.left_win, {
+      else
+         vim.api.nvim_win_set_config(Ui.right_win, {
             relative = "editor",
-            row = branch_row,
-            col = col,
             width = w,
-            height = branch_h,
-            title = " Git Branches ",
-            title_pos = "center",
-         })
-      end
-
-      -- Configure & display Code Changes window (Ui.diff_win)
-      if Ui.diff_win and vim.api.nvim_win_is_valid(Ui.diff_win) then
-         vim.api.nvim_win_set_config(Ui.diff_win, {
-            relative = "editor",
-            row = diff_row,
+            height = log_h,
+            row = log_row,
             col = col,
-            width = w,
-            height = diff_h,
          })
       end
    else
-      local diff_h = math.max(lower_row - diff_row - 2, 1)
-
-      -- Hide Commit Log when not viewing branches
+      -- CRITICAL FIX: Close right_win when NOT in branches mode
       if Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win) then
-         vim.api.nvim_win_set_config(Ui.right_win, { hide = true })
-      end
-
-      if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
-         vim.api.nvim_win_set_config(Ui.left_win, {
-            relative = "editor",
-            row = lower_row,
-            col = col,
-            width = w,
-            height = lower_h,
-            title = (Ui.mode == "stashes") and " Stashes " or " Files Changed ",
-            title_pos = "center",
-         })
-      end
-
-      if Ui.diff_win and vim.api.nvim_win_is_valid(Ui.diff_win) then
-         vim.api.nvim_win_set_config(Ui.diff_win, {
-            relative = "editor",
-            row = diff_row,
-            col = col,
-            width = w,
-            height = diff_h,
-         })
+         pcall(vim.api.nvim_win_close, Ui.right_win, true)
+         Ui.right_win = nil
       end
    end
 
-   if Ui.help_win and vim.api.nvim_win_is_valid(Ui.help_win) then
-      vim.api.nvim_win_set_config(Ui.help_win, {
+   -- 4. Update Left Window (Navigation / List)
+   local left_title = " Files Changed "
+   local left_h = lower_h
+   local left_row = lower_row
+
+   if Ui.mode == "branches" then
+      left_title = " Git Branches "
+      left_h = branch_h
+      left_row = branch_row
+   elseif Ui.mode == "stashes" then
+      left_title = " Stashes "
+   end
+
+   if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
+      vim.api.nvim_win_set_config(Ui.left_win, {
          relative = "editor",
-         row = help_row,
-         col = col,
          width = w,
-         height = help_h,
+         height = left_h,
+         row = left_row,
+         col = col,
+         title = left_title,
+         title_pos = "center",
       })
    end
 end
@@ -1151,6 +1134,8 @@ local function toggle_mode(dir)
    if not Ui then
       return
    end
+
+   Ui.mode = Ui.mode or "files"
 
    local modes = { "branches", "files", "stashes" }
    local current_idx = 1
@@ -1171,7 +1156,7 @@ local function toggle_mode(dir)
    Ui.selected_index = 1
 
    if Ui.mode == "files" then
-      local _ = run_git("git diff --cached --name-only")
+      get_changed_files() -- Make sure tree root and visible tree lines are updated
    elseif Ui.mode == "stashes" then
       load_stashes()
    end
@@ -1179,6 +1164,7 @@ local function toggle_mode(dir)
    if type(update_window_layout) == "function" then
       update_window_layout()
    end
+
    refresh_ui()
    focus_left()
 end
@@ -1544,7 +1530,12 @@ end
 
 -- Open UI
 function M.toggle(opts)
-   -- 1. Buffer Initialization
+   -- 1. If windows are already open, close them (Toggle Off)
+   if Ui and Ui.diff_win and vim.api.nvim_win_is_valid(Ui.diff_win) then
+      M.close()
+      return
+   end
+
    Ui = Ui or {}
 
    if type(get_changed_files) == "function" then
@@ -1554,17 +1545,7 @@ function M.toggle(opts)
       load_branches()
    end
 
-   -- 2. Determine Default Mode
-   -- If no active mode is set, check if there are changed files:
-   -- - Has changed files -> default to "files"
-   -- - No changed files  -> default to "branches"
-   if not Ui.mode then
-      if Ui.changed_files and #Ui.changed_files > 0 then
-         Ui.mode = "files"
-      else
-         Ui.mode = "branches"
-      end
-   end
+   Ui.mode = Ui.mode or "files"
    Ui.selected_index = 1
 
    vim.notify(
@@ -1576,6 +1557,7 @@ function M.toggle(opts)
       vim.log.levels.INFO
    )
 
+   -- 2. Ensure Buffers Exist and are Valid
    if not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
       Ui.diff_buf = vim.api.nvim_create_buf(false, true)
    end
@@ -1624,6 +1606,14 @@ function M.toggle(opts)
       diff_h = math.max(lower_row - diff_row - 2, 1)
    end
 
+   -- 4. Clean up stale window references before opening
+   for _, win_key in ipairs({ "left_win", "right_win", "help_win" }) do
+      if Ui[win_key] and vim.api.nvim_win_is_valid(Ui[win_key]) then
+         pcall(vim.api.nvim_win_close, Ui[win_key], true)
+         Ui[win_key] = nil
+      end
+   end
+
    vim.notify(
       string.format(
          "[GitCompanion Toggle] Mode: %s | editor_h: %d | available_h: %d | help_row: %d | diff_h: %d",
@@ -1661,6 +1651,7 @@ function M.toggle(opts)
          ),
          vim.log.levels.WARN
       )
+      --comment
       Ui.right_win = vim.api.nvim_open_win(Ui.right_buf, false, {
          relative = "editor",
          width = w,
