@@ -1,7 +1,11 @@
 ---@diagnostic disable: undefined-global
 local M = {}
-
--- TODO: add rename context to git commit
+local render_diff
+local toggle_tree_node
+local render_files_tree
+local flatten_tree
+local get_changed_files
+local ns_id
 
 -- Highlights
 vim.api.nvim_set_hl(0, "GitBranchCurrent", { fg = "#549afc" })
@@ -186,141 +190,312 @@ local function load_stashes()
    end, raw)
 end
 
----------------------------------------------------------------------------
--- 🧩 Load list of changed files (staged + unstaged)
---  branch: optional branch or commit ref (defaults to HEAD)
----------------------------------------------------------------------------
-local function get_changed_files(branch)
-   branch = branch or "HEAD" -- fallback if not provided
-
-   -------------------------------------------------------------------------
-   -- Run Git commands:
-   --   - `git diff --cached --name-status` → staged changes
-   --   - `git diff --name-status`          → unstaged changes
-   -------------------------------------------------------------------------
-   local staged_lines = run_git("git diff --cached --name-status " .. branch) or {}
-   local unstaged_lines = run_git("git diff --name-status " .. branch) or {}
-   local untracked_lines = run_git("git ls-files --others --exclude-standard") or {}
-
-   -------------------------------------------------------------------------
-   -- Prepare data structures:
-   --   index   → map of path → { value, status, staged }
-   --   results → list of all files (for ordered display)
-   -------------------------------------------------------------------------
-   local index, results = {}, {}
-
-   -------------------------------------------------------------------------
-   -- Helper: add(status, path, staged_flag)
-   -------------------------------------------------------------------------
-   local function add(status, path, staged_flag)
-      if not index[path] then
-         index[path] = {
-            value = path,
-            status = status or "M",
-            staged = staged_flag or false,
-         }
-         table.insert(results, index[path])
-      else
-         -- Update staged flag and status if necessary
-         if staged_flag then
-            index[path].staged = true
-            index[path].status = status or index[path].status
-         else
-            index[path].staged = index[path].staged or false
-            index[path].status = status or index[path].status
-         end
-      end
-      -- print(
-      --   "get_changed_files: file=",
-      --   path,
-      --   "status=",
-      --   status,
-      --   "staged=",
-      --   index[path].staged
-      -- )
+local function format_node_text(node, indent_level)
+   local indent = string.rep("  ", indent_level)
+   if node.is_dir then
+      local icon = node.expanded and "📂 " or "📁 "
+      return indent .. icon .. node.name .. "/"
+   else
+      -- Visual indicator for staged vs unstaged
+      local icon = node.staged and "✓ " or "• "
+      return indent .. icon .. node.name
    end
-
-   -------------------------------------------------------------------------
-   -- Parse staged lines
-   -------------------------------------------------------------------------
-   for _, line in ipairs(staged_lines) do
-      if line and line:match("%S") then
-         -- line format: "M  path/to/file" or "A  path/to/file"
-         local s, p = line:match("^(%S+)%s+(.*)$")
-         if not s then
-            -- fallback if --name-status didn't provide status
-            s, p = "M", line
-         end
-         if p then
-            add(s, p, true)
-         end
-      end
-   end
-
-   -------------------------------------------------------------------------
-   -- Parse unstaged lines
-   -------------------------------------------------------------------------
-   for _, line in ipairs(unstaged_lines) do
-      if line and line:match("%S") then
-         local s, p = line:match("^(%S+)%s+(.*)$")
-         if not s then
-            s, p = "M", line
-         end
-         if p then
-            add(s, p, false)
-         end
-      end
-   end
-
-   -------------------------------------------------------------------------
-   -- Parse untracked lines
-   -------------------------------------------------------------------------
-   for _, line in ipairs(untracked_lines) do
-      if line and line:match("%S") then
-         add("U", line, false) -- "U" stands for Untracked
-      end
-   end
-
-   -------------------------------------------------------------------------
-   -- Store final list
-   -------------------------------------------------------------------------
-   Ui.changed_files = results
 end
 
--- Diff preview
-local function get_diff_for_target(target)
-   if not target or target == "" then
-      return { "[No target]" }
+-- 2. Flatten tree into line entries based on expansion states
+flatten_tree = function(node, depth, result)
+   depth = depth or 0
+   result = result or {}
+
+   local keys = {}
+   for k in pairs(node.children or {}) do
+      table.insert(keys, k)
    end
-   local root = git_root()
-   local cmd = string.format(
-      "git -C %s diff -- %s; echo '\n--- STAGED CHANGES ---\n'; git -C %s diff --cached -- %s",
-      vim.fn.fnameescape(root),
-      vim.fn.shellescape(target),
-      vim.fn.fnameescape(root),
-      vim.fn.shellescape(target)
-   )
-   local out = vim.fn.systemlist({ "bash", "-c", cmd })
-   if vim.v.shell_error ~= 0 or #out == 0 then
-      return { "[No changes]" }
+   table.sort(keys, function(a, b)
+      local ca, cb = node.children[a], node.children[b]
+      if ca.is_dir ~= cb.is_dir then
+         return ca.is_dir
+      end
+      return ca.name < cb.name
+   end)
+
+   for _, k in ipairs(keys) do
+      local child = node.children[k]
+
+      -- CALL format_node_text HERE
+      table.insert(result, {
+         text = format_node_text(child, depth),
+         node = child,
+      })
+
+      if child.is_dir and child.expanded then
+         flatten_tree(child, depth + 1, result)
+      end
    end
-   return out
+   return result
+end
+
+local function get_tree_ns()
+   if not ns_id then
+      ns_id = vim.api.nvim_create_namespace("gitcompanion_tree_hl")
+   end
+   return ns_id
+end
+
+render_files_tree = function()
+   if not Ui.left_buf or not vim.api.nvim_buf_is_valid(Ui.left_buf) then
+      return
+   end
+
+   local ns = get_tree_ns()
+
+   vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.left_buf })
+   -- Clear previous highlights using safe namespace ID
+   vim.api.nvim_buf_clear_namespace(Ui.left_buf, ns, 0, -1)
+
+   local lines = {}
+   for _, item in ipairs(Ui.visible_tree_lines or {}) do
+      table.insert(lines, item.text)
+   end
+
+   vim.api.nvim_buf_set_lines(Ui.left_buf, 0, -1, false, lines)
+
+   -- Apply file status highlights
+   for line_idx, item in ipairs(Ui.visible_tree_lines or {}) do
+      local node = item.node
+      if node and not node.is_dir then
+         local hl_group = node.staged and "Added" or "Changed"
+         if vim.fn.hlexists("GitSignsAdd") == 1 and node.staged then
+            hl_group = "GitSignsAdd"
+         elseif vim.fn.hlexists("GitSignsChange") == 1 and not node.staged then
+            hl_group = "GitSignsChange"
+         end
+
+         vim.api.nvim_buf_add_highlight(Ui.left_buf, ns, hl_group, line_idx - 1, 0, -1)
+      elseif node and node.is_dir then
+         vim.api.nvim_buf_add_highlight(Ui.left_buf, ns, "Directory", line_idx - 1, 0, -1)
+      end
+   end
+
+   vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.left_buf })
+end
+
+toggle_tree_node = function()
+   if Ui.mode ~= "files" or not Ui.left_win or not vim.api.nvim_win_is_valid(Ui.left_win) then
+      return
+   end
+
+   -- 1. Sync cursor position
+   local cursor = vim.api.nvim_win_get_cursor(Ui.left_win)
+   Ui.selected_index = cursor[1]
+
+   -- 2. Fetch active node
+   local item = Ui.visible_tree_lines and Ui.visible_tree_lines[Ui.selected_index]
+   local node = item and item.node
+
+   -- 3. Toggle expansion if node is a directory
+   if node and node.is_dir then
+      node.expanded = not node.expanded
+
+      -- 4. Re-flatten tree and update buffer lines
+      Ui.visible_tree_lines = flatten_tree(Ui.tree_root)
+      render_files_tree()
+
+      -- 5. Restore cursor position
+      local max_line = #Ui.visible_tree_lines
+      local safe_idx = math.min(math.max(1, Ui.selected_index), max_line)
+      if safe_idx > 0 then
+         pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { safe_idx, 0 })
+      end
+
+      -- Update code preview for new selection focus
+      render_diff()
+   end
+end
+
+-- Helper to parse rename paths from git status or diff
+local function parse_file_status(line)
+   if #line < 4 then
+      return nil
+   end
+
+   local staged_char = line:sub(1, 1)
+   local unstaged_char = line:sub(2, 2)
+   local path_info = line:sub(4):gsub("^%s+", ""):gsub('^"', ""):gsub('"$', "")
+
+   local is_staged = staged_char ~= " " and staged_char ~= "?"
+   local status_code = is_staged and staged_char or unstaged_char
+
+   -- Handle git rename syntax ("R  old_path -> new_path")
+   if status_code == "R" then
+      local old_path, new_path = path_info:match("^(.-)%s*%->%s*(.+)$")
+      local target_path = new_path or path_info
+      return {
+         status = "R",
+         staged = is_staged,
+         path = target_path,
+         old_path = old_path,
+         display = string.format("%s (renamed from %s)", target_path, old_path or "?"),
+      }
+   end
+
+   return {
+      status = status_code,
+      staged = is_staged,
+      path = path_info,
+      display = path_info,
+   }
+end
+
+---------------------------------------------------------------------------
+-- 🧩 Load list of changed files (staged + unstaged)
+---------------------------------------------------------------------------
+get_changed_files = function(branch)
+   local status_lines = vim.fn.systemlist("git status --porcelain")
+   local files = {}
+
+   for _, line in ipairs(status_lines) do
+      local parsed = parse_file_status(line)
+      if parsed then
+         table.insert(files, {
+            path = parsed.path,
+            old_path = parsed.old_path,
+            value = parsed.path,
+            staged = parsed.staged,
+            status = parsed.status,
+            display = parsed.display,
+         })
+      end
+   end
+
+   Ui.tree_root = build_tree_from_files(files)
+   Ui.visible_tree_lines = flatten_tree(Ui.tree_root)
+end
+
+local function get_diff_for_target(path)
+   if not path or path == "" then
+      return { "[No file selected]" }
+   end
+   local cmd = "git --no-pager diff HEAD -- " .. vim.fn.shellescape(path)
+   local diff_lines = vim.fn.systemlist(cmd)
+   if vim.v.shell_error == 0 and #diff_lines > 0 then
+      return diff_lines
+   end
+   return { "[No changes for " .. path .. "]" }
+end
+
+render_diff = function()
+   if not Ui or not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
+      return
+   end
+
+   vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.diff_buf })
+   vim.api.nvim_buf_clear_namespace(Ui.diff_buf, -1, 0, -1)
+
+   local out = { "" }
+
+   if Ui.mode == "files" then
+      if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
+         local cursor = vim.api.nvim_win_get_cursor(Ui.left_win)
+         Ui.selected_index = cursor[1]
+      end
+
+      local item = Ui.visible_tree_lines and Ui.visible_tree_lines[Ui.selected_index]
+      local node = item and item.node
+
+      if node then
+         if node.is_dir then
+            local child_paths = get_all_child_paths(node)
+            out = get_diff_for_paths(child_paths)
+         else
+            out = get_diff_for_target(node.path or node.value or node.name)
+         end
+      else
+         out = { "[No file selected]" }
+      end
+   elseif Ui.mode == "branches" then
+      -- Show branch diff against active HEAD
+      local branch = Ui.branches and Ui.branches[Ui.selected_index]
+      if branch then
+         local clean_branch = branch:gsub("^%*%s*", ""):gsub("%s+", "")
+         out = vim.fn.systemlist("git --no-pager diff " .. vim.fn.shellescape(clean_branch))
+      else
+         out = { "[No branch selected]" }
+      end
+   end
+
+   vim.api.nvim_buf_set_lines(Ui.diff_buf, 0, -1, false, out)
+   vim.api.nvim_set_option_value("filetype", "diff", { buf = Ui.diff_buf })
+
+   for i, line in ipairs(out) do
+      if line:match("^%+.*") then
+         vim.api.nvim_buf_add_highlight(Ui.diff_buf, -1, "DiffAdd", i - 1, 0, -1)
+      elseif line:match("^%-.*") then
+         vim.api.nvim_buf_add_highlight(Ui.diff_buf, -1, "DiffDelete", i - 1, 0, -1)
+      elseif line:match("^@@") then
+         vim.api.nvim_buf_add_highlight(Ui.diff_buf, -1, "DiffHeader", i - 1, 0, -1)
+      end
+   end
+
+   vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.diff_buf })
+end
+
+build_tree_from_files = function(files)
+   local root = { name = "", is_dir = true, children = {}, expanded = true }
+
+   for _, item in ipairs(files) do
+      local path = item.value or item.path or item
+      local parts = {}
+      for part in path:gmatch("[^/]+") do
+         table.insert(parts, part)
+      end
+
+      local current = root
+      for i, part in ipairs(parts) do
+         if i == #parts then
+            current.children[part] = current.children[part]
+                or {
+                   name = part,
+                   is_dir = false,
+                   path = path,
+                   old_path = item.old_path,
+                   status = item.status or "M",
+                   staged = item.staged or false,
+                }
+         else
+            if not current.children[part] then
+               current.children[part] = {
+                  name = part,
+                  is_dir = true,
+                  children = {},
+                  expanded = true,
+               }
+            end
+            current = current.children[part]
+         end
+      end
+   end
+   return root
 end
 
 ---------------------------------------------------------------------------
 -- Render the left panel (branches or changed files)
 ---------------------------------------------------------------------------
 local function render_left()
-   if not Ui.left_buf then
-      -- print("render_left: no left buffer")
+   if not Ui or not Ui.left_buf then
       return
    end
 
-   -- print("render_left: starting, mode =", Ui.mode)
-   vim.api.nvim_buf_set_option(Ui.left_buf, "modifiable", true)
+   -- Delegate directly to tree renderer for files mode
+   if Ui.mode == "files" or not (Ui.mode == "branches" or Ui.mode == "stashes") then
+      render_files_tree()
+      return -- Critical: stop execution so we don't wipe the buffer below!
+   end
 
-   local lines = {}    -- lines to write
-   local highlights = {} -- highlight info
+   vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.left_buf })
+
+   local lines = {}
+   local highlights = {}
 
    if Ui.mode == "branches" then
       load_branches()
@@ -342,45 +517,8 @@ local function render_left()
          table.insert(lines, "  " .. s)
          table.insert(highlights, { line = i, hl = "GitMsg", col = 0, length = -1 })
       end
-   else
-      -- print(
-      --   "render_left: rendering changed files, selected branch =",
-      --   Ui.branch_selected
-      -- )
-      -- print("render_left: get_changed_files call")
-      get_changed_files(Ui.branch_selected)
-      -- print(
-      --   "render_left: Ui.changed_files count =",
-      --   #Ui.changed_files
-      -- )
-      for i, f in ipairs(Ui.changed_files) do
-         local prefix = f.staged and "✅" or "💣"
-         -- print("render_left: prefix =", prefix)
-         local line = string.format(" %s %s %s", prefix, f.status or "", f.value)
-         table.insert(lines, line)
-
-         -- Highlight prefix color
-         table.insert(highlights, {
-            line = i,
-            hl = f.staged and "GitStaged" or "GitUnstaged",
-            col = 0,
-            length = #line, -- only highlight [U]/[S]
-         })
-
-         -- Highlight filename differently
-         table.insert(highlights, {
-            line = i,
-            hl = f.staged and "GitStagedFile" or "GitUnstagedFile",
-            col = 4,
-            length = #f.value,
-         })
-      end
    end
 
-   -- print(
-   --   "render_left: writing lines to buffer, line count =",
-   --   #lines
-   -- )
    vim.api.nvim_buf_set_lines(Ui.left_buf, 0, -1, false, lines)
 
    -- Apply highlights
@@ -389,8 +527,7 @@ local function render_left()
       vim.api.nvim_buf_add_highlight(Ui.left_buf, -1, h.hl, h.line - 1, h.col or 0, h.length or -1)
    end
 
-   vim.api.nvim_buf_set_option(Ui.left_buf, "modifiable", false)
-   -- print("render_left: done")
+   vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.left_buf })
 end
 
 ---------------------------------------------------------------------------
@@ -534,11 +671,46 @@ local function render_right()
 end
 
 -- Render diff panel (Code Changes)
-local function render_diff()
+-- Helper 1: Recursively collect all file paths under a directory node
+local function get_all_child_paths(node)
+   local paths = {}
+   local function collect(n)
+      if not n then
+         return
+      end
+      if n.is_dir then
+         for _, child in pairs(n.children or {}) do
+            collect(child)
+         end
+      elseif n.path then
+         table.insert(paths, n.path)
+      end
+   end
+   collect(node)
+   return paths
+end
+
+-- Helper 2: Fetch combined git diff for multiple file paths
+local function get_diff_for_paths(paths)
+   if #paths == 0 then
+      return { "[Empty directory or no changes]" }
+   end
+   local escaped = {}
+   for _, p in ipairs(paths) do
+      table.insert(escaped, vim.fn.shellescape(p))
+   end
+   local cmd = "git --no-pager diff HEAD -- " .. table.concat(escaped, " ")
+   local diff_lines = vim.fn.systemlist(cmd)
+   return (vim.v.shell_error == 0 and #diff_lines > 0) and diff_lines or { "[No changes in folder]" }
+end
+
+render_diff = function()
    if not Ui or not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
       return
    end
-   vim.api.nvim_buf_set_option(Ui.diff_buf, "modifiable", true)
+
+   -- Updated API calls replacing deprecated nvim_buf_set_option
+   vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.diff_buf })
    vim.api.nvim_buf_clear_namespace(Ui.diff_buf, -1, 0, -1)
 
    local out = { "" }
@@ -548,8 +720,23 @@ local function render_diff()
          local cursor = vim.api.nvim_win_get_cursor(Ui.left_win)
          Ui.selected_index = cursor[1]
       end
-      local sel = Ui.changed_files[Ui.selected_index]
-      out = sel and get_diff_for_target(sel.value) or { "[No file selected]" }
+
+      -- Access the active node directly from the flattened visible tree list
+      local item = Ui.visible_tree_lines and Ui.visible_tree_lines[Ui.selected_index]
+      local node = item and item.node
+
+      if node then
+         if node.is_dir then
+            -- Directory selected: aggregate diffs for all child files
+            local child_paths = get_all_child_paths(node)
+            out = get_diff_for_paths(child_paths)
+         else
+            -- Single file selected
+            out = get_diff_for_target(node.path)
+         end
+      else
+         out = { "[No file selected]" }
+      end
    elseif Ui.mode == "stashes" then
       if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
          local cursor = vim.api.nvim_win_get_cursor(Ui.left_win)
@@ -586,7 +773,7 @@ local function render_diff()
    end
 
    vim.api.nvim_buf_set_lines(Ui.diff_buf, 0, -1, false, out)
-   vim.api.nvim_buf_set_option(Ui.diff_buf, "filetype", "diff")
+   vim.api.nvim_set_option_value("filetype", "diff", { buf = Ui.diff_buf })
 
    for i, line in ipairs(out) do
       if line:match("^%+.*") then
@@ -602,7 +789,7 @@ local function render_diff()
       end
    end
 
-   vim.api.nvim_buf_set_option(Ui.diff_buf, "modifiable", false)
+   vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.diff_buf })
 end
 
 ---------------------------------------------------------------------------
@@ -865,13 +1052,12 @@ local function init_ui()
    focus_left()
 end
 
-local function update_window_layout()
+function update_window_layout()
    if not Ui or not Ui.diff_win or not vim.api.nvim_win_is_valid(Ui.diff_win) then
       return
    end
 
-   -- vim.notify(string.format("[DEBUG LayoutUpdate] Called with Ui.mode = %s", tostring(Ui.mode)), vim.log.levels.WARN)
-
+   -- 1. Recalculate layout rows & heights
    local ui = vim.api.nvim_list_uis()[1]
    local editor_w = ui and ui.width or vim.o.columns
    local editor_h = ui and ui.height or vim.o.lines
@@ -891,96 +1077,78 @@ local function update_window_layout()
    local branch_row = help_row - branch_h - 2
    local log_row = branch_row - log_h - 2
    local lower_row = help_row - lower_h - 2
-
    local diff_row = 2
 
-   -- vim.notify(
-   --    string.format(
-   --       "[DEBUG LayoutUpdate] Mode: %s | right_win Valid: %s",
-   --       tostring(Ui.mode),
-   --       tostring(Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win))
-   --    ),
-   --    vim.log.levels.WARN
-   -- )
-
+   local diff_h
    if Ui.mode == "branches" then
-      local diff_h = math.max(log_row - diff_row - 2, 1)
+      diff_h = math.max(log_row - diff_row - 2, 1)
+   else
+      diff_h = math.max(lower_row - diff_row - 2, 1)
+   end
 
-      -- Configure & display the Commit Log window (Ui.right_win)
-      if Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win) then
-         vim.api.nvim_win_set_config(Ui.right_win, {
+   -- 2. Update Diff Window Size
+   vim.api.nvim_win_set_config(Ui.diff_win, {
+      relative = "editor",
+      width = w,
+      height = diff_h,
+      row = diff_row,
+      col = col,
+   })
+
+   -- 3. Handle Right Win (Commit Log) Visibility Based on Mode
+   if Ui.mode == "branches" then
+      if not Ui.right_win or not vim.api.nvim_win_is_valid(Ui.right_win) then
+         Ui.right_win = vim.api.nvim_open_win(Ui.right_buf, false, {
             relative = "editor",
-            hide = false,
-            row = log_row,
-            col = col,
             width = w,
             height = log_h,
+            row = log_row,
+            col = col,
+            style = "minimal",
+            border = "rounded",
             title = " Commit Log ",
             title_pos = "center",
+            zindex = 10,
          })
-      end
-
-      -- Configure & display Git Branches window (Ui.left_win)
-      if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
-         vim.api.nvim_win_set_config(Ui.left_win, {
+      else
+         vim.api.nvim_win_set_config(Ui.right_win, {
             relative = "editor",
-            row = branch_row,
-            col = col,
             width = w,
-            height = branch_h,
-            title = " Git Branches ",
-            title_pos = "center",
-         })
-      end
-
-      -- Configure & display Code Changes window (Ui.diff_win)
-      if Ui.diff_win and vim.api.nvim_win_is_valid(Ui.diff_win) then
-         vim.api.nvim_win_set_config(Ui.diff_win, {
-            relative = "editor",
-            row = diff_row,
+            height = log_h,
+            row = log_row,
             col = col,
-            width = w,
-            height = diff_h,
          })
       end
    else
-      local diff_h = math.max(lower_row - diff_row - 2, 1)
-
-      -- Hide Commit Log when not viewing branches
+      -- CRITICAL FIX: Close right_win when NOT in branches mode
       if Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win) then
-         vim.api.nvim_win_set_config(Ui.right_win, { hide = true })
-      end
-
-      if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
-         vim.api.nvim_win_set_config(Ui.left_win, {
-            relative = "editor",
-            row = lower_row,
-            col = col,
-            width = w,
-            height = lower_h,
-            title = (Ui.mode == "stashes") and " Stashes " or " Files Changed ",
-            title_pos = "center",
-         })
-      end
-
-      if Ui.diff_win and vim.api.nvim_win_is_valid(Ui.diff_win) then
-         vim.api.nvim_win_set_config(Ui.diff_win, {
-            relative = "editor",
-            row = diff_row,
-            col = col,
-            width = w,
-            height = diff_h,
-         })
+         pcall(vim.api.nvim_win_close, Ui.right_win, true)
+         Ui.right_win = nil
       end
    end
 
-   if Ui.help_win and vim.api.nvim_win_is_valid(Ui.help_win) then
-      vim.api.nvim_win_set_config(Ui.help_win, {
+   -- 4. Update Left Window (Navigation / List)
+   local left_title = " Files Changed "
+   local left_h = lower_h
+   local left_row = lower_row
+
+   if Ui.mode == "branches" then
+      left_title = " Git Branches "
+      left_h = branch_h
+      left_row = branch_row
+   elseif Ui.mode == "stashes" then
+      left_title = " Stashes "
+   end
+
+   if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
+      vim.api.nvim_win_set_config(Ui.left_win, {
          relative = "editor",
-         row = help_row,
-         col = col,
          width = w,
-         height = help_h,
+         height = left_h,
+         row = left_row,
+         col = col,
+         title = left_title,
+         title_pos = "center",
       })
    end
 end
@@ -989,6 +1157,8 @@ local function toggle_mode(dir)
    if not Ui then
       return
    end
+
+   Ui.mode = Ui.mode or "files"
 
    local modes = { "branches", "files", "stashes" }
    local current_idx = 1
@@ -1009,7 +1179,7 @@ local function toggle_mode(dir)
    Ui.selected_index = 1
 
    if Ui.mode == "files" then
-      local _ = run_git("git diff --cached --name-only")
+      get_changed_files() -- Make sure tree root and visible tree lines are updated
    elseif Ui.mode == "stashes" then
       load_stashes()
    end
@@ -1017,109 +1187,110 @@ local function toggle_mode(dir)
    if type(update_window_layout) == "function" then
       update_window_layout()
    end
+
    refresh_ui()
    focus_left()
 end
 
--- Stage or unstage the selected file
+-- Helper to gather all leaf file paths under a node recursively
+local function get_all_child_paths(node)
+   local paths = {}
+   if not node then
+      return paths
+   end
+
+   if not node.is_dir then
+      if node.path then
+         table.insert(paths, node.path)
+      end
+      return paths
+   end
+
+   for _, child in pairs(node.children or {}) do
+      if child.is_dir then
+         local sub_paths = get_all_child_paths(child)
+         for _, p in ipairs(sub_paths) do
+            table.insert(paths, p)
+         end
+      else
+         if child.path then
+            table.insert(paths, child.path)
+         end
+      end
+   end
+   return paths
+end
+
+-- Staging/Unstaging Function with Debugging
 local function stage_unstage_selected()
-   if Ui.mode ~= "files" then
-      -- print(
-      --   "stage_unstage_selected: not in files mode, exiting"
-      -- )
+   if Ui.mode ~= "files" or not Ui.left_win or not vim.api.nvim_win_is_valid(Ui.left_win) then
       return
    end
 
-   local sel = Ui.changed_files[Ui.selected_index]
-   if not sel then
-      -- print(
-      --   "stage_unstage_selected: no file selected at index",
-      --   Ui.selected_index
-      -- )
+   local cursor = vim.api.nvim_win_get_cursor(Ui.left_win)
+   Ui.selected_index = cursor[1]
+
+   local item = Ui.visible_tree_lines and Ui.visible_tree_lines[Ui.selected_index]
+   local node = item and item.node
+   if not node then
       return
    end
 
-   -- print(
-   --   "stage_unstage_selected: selected file =",
-   --   sel.value,
-   --   "staged =",
-   --   sel.staged
-   -- )
-
-   local root = git_root()
-   local staged_files = run_git("git diff --cached --name-only")
-   -- print(
-   --   "stage_unstage_selected: currently staged files:",
-   --   table.concat(staged_files, ", ")
-   -- )
-
-   local cmd
-   if vim.tbl_contains(staged_files, sel.value) then
-      -- print(
-      --   "stage_unstage_selected: file is staged, will unstage"
-      -- )
-      cmd = {
-         "git",
-         "restore",
-         "--staged",
-         root .. "/" .. sel.value,
-      }
-   else
-      -- print(
-      --   "stage_unstage_selected: file is not staged, will stage"
-      -- )
-      cmd = { "git", "add", root .. "/" .. sel.value }
+   local target_paths = node.is_dir and get_all_child_paths(node) or { node.path or node.value or node.name }
+   if #target_paths == 0 then
+      return
    end
 
-   -- Run the git command
-   local result = vim.fn.system(cmd)
-   -- print(
-   --   "stage_unstage_selected: git command executed, output:\n",
-   --   result
-   -- )
+   -- Check current staged status
+   local status_lines = vim.fn.systemlist("git status --porcelain")
+   local staged_set = {}
+   for _, line in ipairs(status_lines) do
+      if #line >= 4 then
+         local staged_char = line:sub(1, 1)
+         local path = line:sub(4):gsub("^%s+", ""):gsub('^"', ""):gsub('"$', "")
+         if staged_char ~= " " and staged_char ~= "?" then
+            staged_set[path] = true
+         end
+      end
+   end
 
-   -- Refresh changed files
-   -- print(
-   --   "stage_unstage_selected: refreshing changed files"
-   -- )
+   local all_staged = true
+   for _, path in ipairs(target_paths) do
+      if not staged_set[path] then
+         all_staged = false
+         break
+      end
+   end
+
+   -- Execute git action
+   local action = all_staged and "restore --staged -- " or "add -- "
+   local cmd = "git " .. action
+   for _, path in ipairs(target_paths) do
+      cmd = cmd .. " " .. vim.fn.shellescape(path)
+   end
+
+   vim.fn.system(cmd)
+
+   -- 1. Refresh changed files list
    get_changed_files(Ui.branch_selected)
-   -- print(
-   --   "stage_unstage_selected: Ui.changed_files after refresh:"
-   -- )
-   for i, f in ipairs(Ui.changed_files) do
-      -- print(
-      --   string.format(
-      --     "  [%d] %s staged=%s status=%s",
-      --     i,
-      --     f.value,
-      --     tostring(f.staged),
-      --     f.status or ""
-      --   )
-      -- )
+
+   -- 2. Re-flatten tree from newly updated tree_root
+   if Ui.tree_root then
+      Ui.visible_tree_lines = flatten_tree(Ui.tree_root)
    end
 
-   -- Redraw panels
-   -- print(
-   --   "stage_unstage_selected: rendering left panel"
-   -- )
-   render_left()
-   -- print(
-   --   "stage_unstage_selected: rendering right panel"
-   -- )
-   render_right()
+   -- 3. Render tree buffer
+   render_files_tree()
+
+   -- 4. Preserve cursor
+   local max_line = #(Ui.visible_tree_lines or {})
+   local safe_idx = math.min(math.max(1, Ui.selected_index), max_line)
+   if safe_idx > 0 then
+      pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { safe_idx, 0 })
+   end
+
+   -- 5. Refresh diff pane
    render_diff()
-
-   -- Highlight selected line briefly
-   vim.api.nvim_buf_add_highlight(Ui.left_buf, -1, "Visual", Ui.selected_index - 1, 0, -1)
-   vim.defer_fn(function()
-      -- print(
-      --   "stage_unstage_selected: deferred render_left"
-      -- )
-      render_left()
-   end, 100)
-
-   vim.api.nvim_win_set_cursor(Ui.left_win, { Ui.selected_index, 0 })
-   -- print("stage_unstage_selected: finished")
 end
 
 -- Discard changes for the selected file
@@ -1382,7 +1553,12 @@ end
 
 -- Open UI
 function M.toggle(opts)
-   -- 1. Buffer Initialization
+   -- 1. If windows are already open, close them (Toggle Off)
+   if Ui and Ui.diff_win and vim.api.nvim_win_is_valid(Ui.diff_win) then
+      M.close()
+      return
+   end
+
    Ui = Ui or {}
 
    if type(get_changed_files) == "function" then
@@ -1392,28 +1568,19 @@ function M.toggle(opts)
       load_branches()
    end
 
-   -- 2. Determine Default Mode
-   -- If no active mode is set, check if there are changed files:
-   -- - Has changed files -> default to "files"
-   -- - No changed files  -> default to "branches"
-   if not Ui.mode then
-      if Ui.changed_files and #Ui.changed_files > 0 then
-         Ui.mode = "files"
-      else
-         Ui.mode = "branches"
-      end
-   end
+   Ui.mode = Ui.mode or "files"
    Ui.selected_index = 1
 
-   -- vim.notify(
-   --    string.format(
-   --       "[DEBUG Toggle Init] Mode: %s | Changed files: %d",
-   --       tostring(Ui.mode),
-   --       Ui.changed_files and #Ui.changed_files or 0
-   --    ),
-   --    vim.log.levels.INFO
-   -- )
+   vim.notify(
+      string.format(
+         "[DEBUG Toggle Init] Mode: %s | Changed files: %d",
+         tostring(Ui.mode),
+         Ui.changed_files and #Ui.changed_files or 0
+      ),
+      vim.log.levels.INFO
+   )
 
+   -- 2. Ensure Buffers Exist and are Valid
    if not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
       Ui.diff_buf = vim.api.nvim_create_buf(false, true)
    end
@@ -1462,17 +1629,25 @@ function M.toggle(opts)
       diff_h = math.max(lower_row - diff_row - 2, 1)
    end
 
-   -- vim.notify(
-   -- 	string.format(
-   -- 		"[GitCompanion Toggle] Mode: %s | editor_h: %d | available_h: %d | help_row: %d | diff_h: %d",
-   -- 		tostring(Ui.mode),
-   -- 		editor_h,
-   -- 		available_h,
-   -- 		help_row,
-   -- 		diff_h
-   -- 	),
-   -- 	vim.log.levels.WARN
-   -- )
+   -- 4. Clean up stale window references before opening
+   for _, win_key in ipairs({ "left_win", "right_win", "help_win" }) do
+      if Ui[win_key] and vim.api.nvim_win_is_valid(Ui[win_key]) then
+         pcall(vim.api.nvim_win_close, Ui[win_key], true)
+         Ui[win_key] = nil
+      end
+   end
+
+   vim.notify(
+      string.format(
+         "[GitCompanion Toggle] Mode: %s | editor_h: %d | available_h: %d | help_row: %d | diff_h: %d",
+         tostring(Ui.mode),
+         editor_h,
+         available_h,
+         help_row,
+         diff_h
+      ),
+      vim.log.levels.WARN
+   )
 
    -- 3. Open Floating Windows
    Ui.diff_win = vim.api.nvim_open_win(Ui.diff_buf, false, {
@@ -1489,16 +1664,17 @@ function M.toggle(opts)
    })
 
    if Ui.mode == "branches" then
-      -- vim.notify(
-      --    string.format(
-      --       "[DEBUG Creating Right Win] Mode: %s | right_buf Valid: %s | log_row: %d | log_h: %d",
-      --       tostring(Ui.mode),
-      --       tostring(Ui.right_buf and vim.api.nvim_buf_is_valid(Ui.right_buf)),
-      --       log_row,
-      --       log_h
-      --    ),
-      --    vim.log.levels.WARN
-      -- )
+      vim.notify(
+         string.format(
+            "[DEBUG Creating Right Win] Mode: %s | right_buf Valid: %s | log_row: %d | log_h: %d",
+            tostring(Ui.mode),
+            tostring(Ui.right_buf and vim.api.nvim_buf_is_valid(Ui.right_buf)),
+            log_row,
+            log_h
+         ),
+         vim.log.levels.WARN
+      )
+      --comment
       Ui.right_win = vim.api.nvim_open_win(Ui.right_buf, false, {
          relative = "editor",
          width = w,
@@ -1512,14 +1688,14 @@ function M.toggle(opts)
          zindex = 10,
       })
 
-      -- vim.notify(
-      --    string.format(
-      --       "[DEBUG Right Win Result] right_win ID: %s | Is Valid: %s",
-      --       tostring(Ui.right_win),
-      --       tostring(Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win))
-      --    ),
-      --    vim.log.levels.WARN
-      -- )
+      vim.notify(
+         string.format(
+            "[DEBUG Right Win Result] right_win ID: %s | Is Valid: %s",
+            tostring(Ui.right_win),
+            tostring(Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win))
+         ),
+         vim.log.levels.WARN
+      )
 
       Ui.left_win = vim.api.nvim_open_win(Ui.left_buf, true, {
          relative = "editor",
@@ -1628,13 +1804,14 @@ function M.toggle(opts)
       local lines = {
          " Navigation",
          "  j / k       : Move selection up / down",
-         "  h / l       : Focus left / right panels",
-         "  sj / sk     : Jump up / down between panels",
+         "  sj/sk       : Jump up / down between panels",
          "  H / L       : Cycle views (Branches ↔ Files ↔ Stashes)",
          "",
          " Actions",
          "  <Space>     : Checkout Branch / Stage File / Pop Stash",
-         "  d           : Delete Branch / Discard Changes / Drop Stash",
+         "  d           : Delete Branch / Discard Changes / Drop Stash / Drop Commit",
+         "  r           : Rename Branch (Branches) / Reword Commit (Commit Log)",
+         "  y           : Copy Branch name (Branches) / Copy Commit metadata (Commit Log)",
          "  c           : Commit (Files) / Checkout Remote (Branches)",
          "  n           : Create new branch from selected (Branches)",
          "  m           : Merge branch into current (Branches)",
@@ -1651,7 +1828,7 @@ function M.toggle(opts)
       vim.api.nvim_buf_set_option(buf, "modifiable", false)
 
       local ui = vim.api.nvim_list_uis()[1]
-      local width = 60
+      local width = 75
       local height = #lines
       local row = math.floor((ui.height - height) / 2)
       local col = math.floor((ui.width - width) / 2)
@@ -1771,6 +1948,7 @@ function M.toggle(opts)
          noremap = true,
          silent = true,
       })
+
       vim.keymap.set("n", "L", function()
          toggle_mode("next")
       end, {
@@ -2063,134 +2241,71 @@ function M.toggle(opts)
 
       -- keymap for dropping commits
       vim.keymap.set("n", "d", function()
-         -- Check if we're in the correct mode
-         if Ui.mode ~= "branches" then
-            return
-         end
-
-         -- Check if we're in the right window
          local win = vim.api.nvim_get_current_win()
-         if win ~= Ui.right_win then
-            return
-         end
 
-         -- Get the cursor position and the commit hash
-         local cursor = vim.api.nvim_win_get_cursor(Ui.right_win)
-         local line = vim.api.nvim_buf_get_lines(Ui.right_buf, cursor[1] - 1, cursor[1], false)[1] or ""
+         -- Handlers when focus is on left navigation pane
+         if win == Ui.left_win then
+            if Ui.mode == "files" then
+               discard_changes_selected()
+            elseif Ui.mode == "stashes" then
+               local stash = Ui.stashes and Ui.stashes[Ui.selected_index]
+               if stash then
+                  local ref = stash:match("(stash@{%d+})")
+                  if ref then
+                     local ok = vim.fn.confirm("Drop " .. ref .. "?", "Yes\nNo", 2)
+                     if ok == 1 then
+                        vim.fn.system("git stash drop " .. ref)
+                        load_stashes()
+                        Ui.selected_index = math.max(1, Ui.selected_index - 1)
+                        refresh_ui()
+                        show_centered_message("Dropped " .. ref, "🗑️")
+                     end
+                  end
+               end
+            elseif Ui.mode == "branches" then
+               delete_branch()
+            end
 
-         -- Extract the commit hash from the line
-         local hash = line:match("^(%S+)") -- Get the commit hash
-         if not hash then
-            return
-         end
+            -- Handlers when focus is on Commit Log window (Ui.right_win)
+         elseif win == Ui.right_win then
+            local cursor = vim.api.nvim_win_get_cursor(Ui.right_win)
+            local line = vim.api.nvim_buf_get_lines(Ui.right_buf, cursor[1] - 1, cursor[1], false)[1]
+            local hash = line and line:match("([0-9a-f]+)")
 
-         -- Get the next commit hash
-         local next_commit_hash = vim.fn.trim(vim.fn.system("git log --format='%H' --skip=1 " .. hash .. " -n 1"))
-         if not next_commit_hash or next_commit_hash == "" then
-            vim.notify("No next commit found", vim.log.levels.ERROR)
-            return
-         end
-
-         -- Ask for user confirmation before discarding the commit
-         local ui = vim.api.nvim_list_uis()[1]
-         local width = 51
-         local height = 1
-         local row = 3
-         local col = math.floor((ui.width - width) / 2)
-
-         local buf = vim.api.nvim_create_buf(false, true)
-         local win_confirm = vim.api.nvim_open_win(buf, true, {
-            relative = "editor",
-            width = width,
-            height = height,
-            row = row,
-            col = col,
-            style = "minimal",
-            border = "rounded",
-            title = " Confirmation ",
-            title_pos = "center",
-            zindex = 500,
-         })
-
-         local confirm_message = "Are you sure you want to discard this commit? (y/N)"
-         vim.api.nvim_buf_set_lines(buf, 0, -1, false, { confirm_message })
-
-         local function close_confirm_win()
-            if vim.api.nvim_win_is_valid(win_confirm) then
-               vim.api.nvim_win_close(win_confirm, true)
+            if hash then
+               local confirm = vim.fn.confirm("Revert commit " .. hash:sub(1, 7) .. "?", "Yes\nNo", 2)
+               if confirm == 1 then
+                  local out = vim.fn.system("git revert --no-edit " .. hash)
+                  if vim.v.shell_error == 0 then
+                     show_centered_message("Reverted " .. hash:sub(1, 7), "🔄")
+                     refresh_ui()
+                  else
+                     vim.notify("Failed to revert commit: " .. out, vim.log.levels.ERROR)
+                  end
+               end
             end
          end
-
-         -- Confirm keymap for 'y' and 'n'
-         vim.keymap.set("n", "y", function()
-            -- Perform the reset to the next commit
-            local reset_command = "git reset --hard " .. next_commit_hash
-            -- print("Running git reset command:", reset_command)
-            vim.fn.system(reset_command)
-
-            -- Show a success message
-            local msg = "Reset to commit: " .. next_commit_hash
-            local buf_ok = vim.api.nvim_create_buf(false, true)
-            vim.api.nvim_buf_set_lines(buf_ok, 0, -1, false, { msg })
-            vim.api.nvim_buf_add_highlight(buf_ok, -1, "ResetGreen", 0, 0, -1)
-
-            local width = #msg + 4
-            local ui = vim.api.nvim_list_uis()[1]
-            local col = math.floor((ui.width - width) / 2)
-
-            -- Position for the success message: Place it 2 rows below the confirmation
-
-            local win_ok = vim.api.nvim_open_win(buf_ok, false, {
-               relative = "editor",
-               width = width,
-               height = 1,
-               row = row,
-               col = col,
-               style = "minimal",
-               border = "rounded",
-               zindex = 600,
-            })
-
-            vim.defer_fn(function()
-               if vim.api.nvim_win_is_valid(win_ok) then
-                  vim.api.nvim_win_close(win_ok, true)
-               end
-            end, 1500)
-
-            -- Refresh UI to reflect the reset state
-            Ui.mode = "branches" -- Stay in branches mode after reset
-            refresh_ui()
-
-            close_confirm_win()
-         end, { buffer = buf, noremap = true, silent = true })
-
-         -- Cancel reset if user presses 'n' or Esc
-         vim.keymap.set("n", "n", function()
-            vim.notify("Drop Aborted", vim.log.levels.INFO)
-            close_confirm_win()
-         end, { buffer = buf, noremap = true, silent = true })
-
-         vim.keymap.set("n", "q", function()
-            vim.notify("Drop Aborted", vim.log.levels.INFO)
-            close_confirm_win()
-         end, { buffer = buf, noremap = true, silent = true })
-
-         vim.keymap.set("n", "<Esc>", function()
-            vim.notify("Drop Aborted", vim.log.levels.INFO)
-            close_confirm_win()
-         end, { buffer = buf, noremap = true, silent = true })
-      end, { buffer = Ui.right_buf, noremap = true, silent = true })
+      end, { noremap = true, silent = true })
 
       -- Apply Action (<Space>)
       vim.keymap.set("n", "<Space>", function()
          local win = vim.api.nvim_get_current_win()
          if win ~= Ui.left_win then
+            vim.notify(
+               "[Space Debug] Current window ("
+               .. tostring(win)
+               .. ") != Ui.left_win ("
+               .. tostring(Ui.left_win)
+               .. ")",
+               vim.log.levels.WARN
+            )
             return
          end
 
+         vim.notify("[Space Debug] Key pressed in left_win. Mode: " .. tostring(Ui.mode), vim.log.levels.INFO)
+
          if Ui.mode == "files" then
             stage_unstage_selected()
-            render_left()
          elseif Ui.mode == "branches" then
             checkout_branch()
          elseif Ui.mode == "stashes" then
@@ -2213,6 +2328,16 @@ function M.toggle(opts)
                end
             end
          end
+      end, { buffer = buf, noremap = true, silent = true })
+
+      -- Add Enter keymap to toggle fold expansion on directory nodes
+      vim.keymap.set("n", "<CR>", function()
+         local win = vim.api.nvim_get_current_win()
+         if win ~= Ui.left_win or Ui.mode ~= "files" then
+            return
+         end
+
+         toggle_tree_node()
       end, { buffer = buf, noremap = true, silent = true })
 
       -- Delete Action (d)
@@ -2748,6 +2873,283 @@ function M.toggle(opts)
          refresh_ui()
       end)
 
+      -- Rename commits (in commit float/log) or Rename branches (in branches mode)
+      vim.keymap.set("n", "r", function()
+         local win = vim.api.nvim_get_current_win()
+
+         -- 1. Rename Commit when inside the Right Window (Commit Log)
+         if win == Ui.right_win then
+            local cursor = vim.api.nvim_win_get_cursor(Ui.right_win)
+            local line = vim.api.nvim_buf_get_lines(Ui.right_buf, cursor[1] - 1, cursor[1], false)[1] or ""
+            local hash = line:match("^(%S+)")
+
+            if not hash then
+               vim.notify("Git: No valid commit hash found on current line.", vim.log.levels.WARN)
+               return
+            end
+
+            -- Check if selected commit is HEAD
+            local head_hash = vim.fn.system("git rev-parse --short HEAD"):gsub("%s+", "")
+            local is_head = hash:find("^" .. head_hash) or head_hash:find("^" .. head_hash)
+
+            local current_msg = vim.fn.system("git log -1 --format=%s " .. hash):gsub("%s+$", "")
+
+            vim.ui.input({
+               prompt = "Rename commit (" .. hash:sub(1, 7) .. "): ",
+               default = current_msg,
+            }, function(new_msg)
+               if not new_msg or new_msg == "" or new_msg == current_msg then
+                  return
+               end
+
+               if is_head then
+                  -- Simple amend for HEAD
+                  local cmd = "git commit --amend -m " .. vim.fn.shellescape(new_msg)
+                  local out = vim.fn.system(cmd)
+                  if vim.v.shell_error == 0 then
+                     show_centered_message("Renamed HEAD commit", "✏️")
+                     refresh_ui()
+                  else
+                     vim.notify("Failed to rename HEAD commit: " .. out, vim.log.levels.ERROR)
+                  end
+               else
+                  -- Autostash uncommitted worktree changes before rebasing
+                  local stashed = false
+                  local status = vim.fn.system("git status --porcelain"):gsub("%s+$", "")
+                  if #status > 0 then
+                     vim.fn.system("git stash push -m 'temp_reword_stash'")
+                     stashed = true
+                  end
+
+                  -- Non-interactive Git rebase with custom sequence editor
+                  local sequence_cmd = string.format(
+                     "GIT_SEQUENCE_EDITOR=\"sed -i '' 's/^pick %s/reword %s/'\" GIT_EDITOR=\"echo %s >\" git rebase -i %s^",
+                     hash,
+                     hash,
+                     vim.fn.shellescape(new_msg),
+                     hash
+                  )
+
+                  -- Fallback using git-filter-repo / parent reset if rebase fails
+                  local rebase_cmd = string.format("git rebase -i --onto %s %s^", hash, hash)
+
+                  -- Execute reword via exec during rebase
+                  local exec_cmd = string.format(
+                     'git rebase -i %s^ --exec "git commit --amend -m %s"',
+                     hash,
+                     vim.fn.shellescape(new_msg)
+                  )
+
+                  -- Simple head check & reword exec
+                  local out = vim.fn.system(
+                     string.format(
+                        "git filter-branch --msg-filter 'if [ $GIT_COMMIT = %s ]; then echo %s; else cat; fi' %s~1..HEAD",
+                        hash,
+                        vim.fn.shellescape(new_msg),
+                        hash
+                     )
+                  )
+
+                  -- If filter-branch is blocked/slow, fallback to git commit-tree plumbing safely:
+                  if vim.v.shell_error ~= 0 then
+                     local parent = vim.fn.system("git rev-parse " .. hash .. "^"):gsub("%s+", "")
+                     local tree = vim.fn.system("git rev-parse " .. hash .. "^{tree}"):gsub("%s+", "")
+                     local new_commit = vim.fn
+                         .system(
+                            string.format(
+                               "git commit-tree %s -p %s -m %s",
+                               tree,
+                               parent,
+                               vim.fn.shellescape(new_msg)
+                            )
+                         )
+                         :gsub("%s+", "")
+
+                     if #new_commit > 0 then
+                        out = vim.fn.system(string.format("git rebase --onto %s %s HEAD", new_commit, hash))
+                     end
+                  end
+
+                  -- Restore stashed changes if any were saved
+                  if stashed then
+                     vim.fn.system("git stash pop")
+                  end
+
+                  if vim.v.shell_error == 0 then
+                     show_centered_message("Renamed commit " .. hash:sub(1, 7), "✏️")
+                     refresh_ui()
+                  else
+                     vim.notify("Failed to reword commit: " .. out, vim.log.levels.ERROR)
+                  end
+               end
+            end)
+
+            -- 2. Rename Branch when inside Left Window in 'branches' mode
+         elseif win == Ui.left_win and Ui.mode == "branches" then
+            local branch = Ui.branches[Ui.selected_index]
+            if not branch or branch == "" then
+               branch = Ui.branch_selected or "HEAD"
+            end
+
+            vim.ui.input({
+               prompt = "Rename branch '" .. branch .. "'",
+               default = branch,
+            }, function(new_branch)
+               if not new_branch or new_branch == "" or new_branch == branch then
+                  return
+               end
+
+               local cmd =
+                   string.format("git branch -m %s %s", vim.fn.shellescape(branch), vim.fn.shellescape(new_branch))
+               local out = vim.fn.system(cmd)
+
+               if vim.v.shell_error == 0 then
+                  if Ui.branch_selected == branch then
+                     Ui.branch_selected = new_branch
+                  end
+                  show_centered_message("Renamed branch: " .. branch .. " ➔ " .. new_branch, "🌿")
+                  load_branches()
+                  refresh_ui()
+               else
+                  vim.notify("Failed to rename branch: " .. out, vim.log.levels.ERROR)
+               end
+            end)
+         end
+      end, { noremap = true, silent = true, desc = "Rename commit or branch" })
+
+      -- Yank branch (in branch view) or commit details (in commit view)
+      vim.keymap.set("n", "y", function()
+         local win = vim.api.nvim_get_current_win()
+
+         -- 1. Commit View: Open custom floating modal
+         if win == Ui.right_win then
+            local cursor = vim.api.nvim_win_get_cursor(Ui.right_win)
+            local line = vim.api.nvim_buf_get_lines(Ui.right_buf, cursor[1] - 1, cursor[1], false)[1] or ""
+            local hash = line:match("^(%S+)")
+
+            if not hash then
+               vim.notify("Git: No valid commit hash found on current line.", vim.log.levels.WARN)
+               return
+            end
+
+            local options = {
+               " 1. ID",
+               " 2. Title",
+               " 3. Description",
+               " 4. Author",
+               " 5. Time",
+            }
+
+            -- Create scratch buffer for floating menu
+            local buf = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_buf_set_lines(buf, 0, -1, false, options)
+
+            -- Window dimensions and centering
+            local width = 30
+            local height = #options
+            local ui = vim.api.nvim_list_uis()[1]
+            local row = math.floor((ui.height - height) / 2)
+            local col = math.floor((ui.width - width) / 2)
+
+            local float_win = vim.api.nvim_open_win(buf, true, {
+               relative = "editor",
+               width = width,
+               height = height,
+               row = row,
+               col = col,
+               style = "minimal",
+               border = "rounded",
+               title = " Copy Commit ",
+               title_pos = "center",
+            })
+
+            -- Buffer local options
+            vim.bo[buf].modifiable = false
+            vim.bo[buf].bufhidden = "wipe"
+            vim.wo[float_win].cursorline = true
+
+            -- Sanitized commit hash extraction (strictly hex)
+            local raw_hash = line:match("([a-f0-9]+)") or hash
+            local clean_hash = vim.fn.shellescape(raw_hash)
+
+            -- Helper function to yank based on index (1..5)
+            local function perform_yank(choice_num)
+               if vim.api.nvim_win_is_valid(float_win) then
+                  vim.api.nvim_win_close(float_win, true)
+               end
+
+               local text_to_yank = ""
+               local choice_name = ""
+
+               if choice_num == 1 then
+                  choice_name = "ID"
+                  -- Returns full 40-character commit SHA safely
+                  text_to_yank = vim.fn.system("git rev-parse " .. clean_hash):gsub("%s+", "")
+               elseif choice_num == 2 then
+                  choice_name = "Title"
+                  text_to_yank = vim.fn.system("git log -1 --format=%s " .. clean_hash):gsub("%s+$", "")
+               elseif choice_num == 3 then
+                  choice_name = "Description"
+                  text_to_yank = vim.fn.system("git log -1 --format=%b " .. clean_hash):gsub("%s+$", "")
+               elseif choice_num == 4 then
+                  choice_name = "Author"
+                  -- Fixed shell redirection: quoted placeholder format string
+                  text_to_yank = vim.fn.system("git log -1 --format='%an <%ae>' " .. clean_hash):gsub("%s+$", "")
+               elseif choice_num == 5 then
+                  choice_name = "Time"
+                  text_to_yank = vim.fn.system("git log -1 --format=%cd " .. clean_hash):gsub("%s+$", "")
+               end
+
+               if text_to_yank ~= "" then
+                  vim.fn.setreg('"', text_to_yank)
+                  vim.fn.setreg("+", text_to_yank)
+                  show_centered_message("Yanked " .. choice_name .. ": " .. text_to_yank:sub(1, 35), "📋")
+               else
+                  vim.notify(
+                     "Git: Selected field is empty for commit " .. raw_hash:sub(1, 7),
+                     vim.log.levels.INFO
+                  )
+               end
+            end
+            -- Keymaps for selecting via 1-5 number keys
+            for i = 1, 5 do
+               vim.keymap.set("n", tostring(i), function()
+                  perform_yank(i)
+               end, { buffer = buf, nowait = true, noremap = true, silent = true })
+            end
+
+            -- Keymap for selecting current cursor line with <CR>
+            vim.keymap.set("n", "<CR>", function()
+               local line_num = vim.api.nvim_win_get_cursor(float_win)[1]
+               perform_yank(line_num)
+            end, { buffer = buf, noremap = true, silent = true })
+
+            -- Keymaps to close floating menu with <Esc> or q
+            local close_keys = { "<Esc>", "q" }
+            for _, key in ipairs(close_keys) do
+               vim.keymap.set("n", key, function()
+                  if vim.api.nvim_win_is_valid(float_win) then
+                     vim.api.nvim_win_close(float_win, true)
+                  end
+               end, { buffer = buf, noremap = true, silent = true })
+            end
+
+            -- 2. Branch View: Yank selected branch name directly
+         elseif win == Ui.left_win and Ui.mode == "branches" then
+            local branch = Ui.branches[Ui.selected_index]
+            if not branch or branch == "" then
+               branch = Ui.branch_selected or "HEAD"
+            end
+
+            -- Clean up active branch markers (e.g., stripping '* ')
+            branch = branch:gsub("^%*%s*", ""):gsub("%s+$", "")
+
+            vim.fn.setreg('"', branch)
+            vim.fn.setreg("+", branch)
+            show_centered_message("Yanked branch: " .. branch, "🌿")
+         end
+      end, { noremap = true, silent = true, desc = "Yank branch or commit metadata" })
+
       -- n keymap to create new branches off of selected branch
       vim.keymap.set("n", "n", function()
          local buf = Ui.left_buf
@@ -3150,8 +3552,6 @@ function M.toggle(opts)
       })
    end
 
-   -- comment
-   --
    -- Apply keymaps to both buffers
    set_keymaps(Ui.left_buf)
    set_keymaps(Ui.right_buf)
