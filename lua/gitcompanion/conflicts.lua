@@ -18,50 +18,54 @@ end
 
 local function safe_set_cursor(win, line, col)
 	if not win or not vim.api.nvim_win_is_valid(win) then
-		debug_log("safe_set_cursor: Invalid window target", vim.log.levels.WARN)
 		return
 	end
 	local buf = vim.api.nvim_win_get_buf(win)
 	local line_count = vim.api.nvim_buf_line_count(buf)
 	local target_line = math.max(1, math.min(line, line_count))
-	debug_log("Setting cursor to line " .. target_line .. " (out of " .. line_count .. ")")
 	pcall(vim.api.nvim_win_set_cursor, win, { target_line, col or 0 })
+end
+
+-- Strip ANSI color escape codes from string outputs
+local function strip_ansi(str)
+	return str:gsub("\27%[[0-9;]*[mK]", ""):gsub("\r", "")
 end
 
 --------------------------------------------------------------------------------
 -- CONFLICT RESOLUTION ENGINE
 --------------------------------------------------------------------------------
 
-function M.sync_to_target_file(float_bufnr, target_bufnr)
-	if not vim.api.nvim_buf_is_valid(float_bufnr) or not vim.api.nvim_buf_is_valid(target_bufnr) then
-		debug_log("sync_to_target_file: Invalid buffer handles", vim.log.levels.ERROR)
+function M.sync_to_target_file(float_bufnr, target_path)
+	if not vim.api.nvim_buf_is_valid(float_bufnr) then
+		debug_log("sync_to_target_file: Invalid float buffer handle", vim.log.levels.ERROR)
 		return
 	end
+
 	local lines = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
-	debug_log("Syncing " .. #lines .. " lines back to target buffer " .. target_bufnr)
+	local abs_path = vim.fn.fnamemodify(target_path, ":p")
 
-	vim.bo[target_bufnr].modifiable = true
-	vim.api.nvim_buf_set_lines(target_bufnr, 0, -1, false, lines)
-
-	local ok, err = pcall(function()
-		vim.api.nvim_buf_call(target_bufnr, function()
-			vim.cmd("silent write")
-		end)
-	end)
+	-- Write directly to disk
+	local ok, err = pcall(vim.fn.writefile, lines, abs_path)
 	if ok then
-		debug_log("Successfully wrote target file buffer to disk")
+		debug_log("Successfully written directly to disk: " .. abs_path)
 	else
 		debug_log("Failed to write target file: " .. tostring(err), vim.log.levels.ERROR)
 	end
+
+	-- Sync open buffer if loaded in Neovim session
+	local target_bufnr = vim.fn.bufnr(abs_path)
+	if target_bufnr ~= -1 and vim.api.nvim_buf_is_loaded(target_bufnr) then
+		vim.bo[target_bufnr].modifiable = true
+		vim.api.nvim_buf_set_lines(target_bufnr, 0, -1, false, lines)
+		vim.bo[target_bufnr].modified = false
+	end
 end
 
-function M.resolve_conflict_at_cursor(float_bufnr, target_bufnr, mode)
+function M.resolve_conflict_at_cursor(float_bufnr, target_path, mode)
 	mode = mode or "auto"
 	local cur_win = vim.api.nvim_get_current_win()
 	local cursor_line = vim.api.nvim_win_get_cursor(cur_win)[1]
 	local lines = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
-
-	debug_log("Attempting resolution mode: " .. mode .. " at line: " .. cursor_line)
 
 	local start_line, separator_line, end_line = nil, nil, nil
 
@@ -73,7 +77,6 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_bufnr, mode)
 	end
 
 	if not start_line then
-		debug_log("No <<<<<<< marker found above cursor line " .. cursor_line, vim.log.levels.WARN)
 		vim.notify("Cursor is not inside a valid conflict block", vim.log.levels.WARN)
 		return
 	end
@@ -88,20 +91,9 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_bufnr, mode)
 	end
 
 	if not (separator_line and end_line and cursor_line <= end_line) then
-		debug_log(
-			"Incomplete conflict block boundaries. Start: "
-				.. tostring(start_line)
-				.. ", Sep: "
-				.. tostring(separator_line)
-				.. ", End: "
-				.. tostring(end_line),
-			vim.log.levels.WARN
-		)
 		vim.notify("Cursor is not inside a valid conflict block", vim.log.levels.WARN)
 		return
 	end
-
-	debug_log("Conflict bounds confirmed: " .. start_line .. " -> " .. separator_line .. " -> " .. end_line)
 
 	local keep_lines = {}
 	if mode == "both" then
@@ -123,7 +115,7 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_bufnr, mode)
 	end
 
 	vim.api.nvim_buf_set_lines(float_bufnr, start_line - 1, end_line, false, keep_lines)
-	M.sync_to_target_file(float_bufnr, target_bufnr)
+	M.sync_to_target_file(float_bufnr, target_path)
 
 	local remaining = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
 	local has_more = false
@@ -139,7 +131,6 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_bufnr, mode)
 	end
 
 	if not has_more then
-		debug_log("All conflicts resolved! Closing floating window.")
 		vim.notify("All conflicts resolved in file!", vim.log.levels.INFO)
 		if cur_win and vim.api.nvim_win_is_valid(cur_win) and vim.api.nvim_win_get_config(cur_win).relative ~= "" then
 			vim.api.nvim_win_close(cur_win, true)
@@ -159,30 +150,28 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_bufnr, mode)
 end
 
 function M.open_merge_conflict_resolver(file_path)
-	debug_log("open_merge_conflict_resolver called for path: " .. tostring(file_path))
+	-- Clean path input thoroughly
+	local clean_path = strip_ansi(file_path):match("^%s*(.-)%s*$")
+	local full_path = vim.fn.fnamemodify(clean_path, ":p")
 
-	local full_path = vim.fn.fnamemodify(file_path, ":p")
-	local target_bufnr = vim.fn.bufadd(full_path)
-	vim.fn.bufload(target_bufnr)
+	debug_log("Opening conflict resolver for: " .. full_path)
 
-	debug_log("Target buffer ID: " .. target_bufnr .. " | Path: " .. full_path)
-
-	-- Fallback disk read if buffer line count is 0 or unpopulated
-	local file_lines = vim.api.nvim_buf_get_lines(target_bufnr, 0, -1, false)
-	if #file_lines == 0 or (#file_lines == 1 and file_lines[1] == "") then
-		debug_log("Target buffer empty; attempting direct read via vim.fn.readfile", vim.log.levels.WARN)
-		file_lines = vim.fn.readfile(full_path)
+	if vim.fn.filereadable(full_path) == 0 then
+		debug_log("File does not exist or cannot be read at path: " .. full_path, vim.log.levels.ERROR)
+		vim.notify("Error: File not found -> " .. full_path, vim.log.levels.ERROR)
+		return
 	end
 
-	debug_log("Loaded " .. #file_lines .. " lines for conflict resolution float")
-
-	if #file_lines == 0 then
-		debug_log("File content is completely empty or could not be read!", vim.log.levels.ERROR)
-	end
+	local file_lines = vim.fn.readfile(full_path)
 
 	local float_bufnr = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_buf_set_lines(float_bufnr, 0, -1, false, file_lines)
-	vim.bo[float_bufnr].filetype = vim.bo[target_bufnr].filetype
+
+	-- Set filetype by extension manually to avoid relying on unlinked buffers
+	local ft = vim.filetype.detect({ filename = full_path })
+	if ft then
+		vim.bo[float_bufnr].filetype = ft
+	end
 
 	local ui = get_safe_ui()
 	local width = math.max(10, ui.width - 6)
@@ -203,28 +192,18 @@ function M.open_merge_conflict_resolver(file_path)
 		zindex = 700,
 	})
 
-	debug_log("Opened float win ID: " .. winnr .. " with float buffer ID: " .. float_bufnr)
-
-	M.setup_keymaps(float_bufnr, target_bufnr, winnr)
+	M.setup_keymaps(float_bufnr, full_path, winnr)
 	M.highlight_conflicts(float_bufnr)
 
-	local found_marker = false
 	for i, line in ipairs(file_lines) do
 		if line:match("^<<<<<<<") then
 			safe_set_cursor(winnr, i, 0)
-			found_marker = true
-			debug_log("First conflict marker found at line: " .. i)
 			break
 		end
 	end
-
-	if not found_marker then
-		debug_log("No <<<<<<< conflict marker detected in loaded file lines!", vim.log.levels.WARN)
-	end
 end
 
-function M.setup_keymaps(float_bufnr, target_bufnr, winnr)
-	debug_log("Setting up keymaps for float buffer " .. float_bufnr)
+function M.setup_keymaps(float_bufnr, target_path, winnr)
 	local opts = { buffer = float_bufnr, silent = true, noremap = true, nowait = true }
 
 	local keys_to_disable = {
@@ -267,17 +246,16 @@ function M.setup_keymaps(float_bufnr, target_bufnr, winnr)
 	end
 
 	vim.keymap.set("n", "<Space>", function()
-		M.resolve_conflict_at_cursor(float_bufnr, target_bufnr, "auto")
+		M.resolve_conflict_at_cursor(float_bufnr, target_path, "auto")
 		M.highlight_conflicts(float_bufnr)
 	end, opts)
 
 	vim.keymap.set("n", "b", function()
-		M.resolve_conflict_at_cursor(float_bufnr, target_bufnr, "both")
+		M.resolve_conflict_at_cursor(float_bufnr, target_path, "both")
 		M.highlight_conflicts(float_bufnr)
 	end, opts)
 
 	vim.keymap.set("n", "q", function()
-		debug_log("'q' pressed: Closing float win " .. winnr)
 		if vim.api.nvim_win_is_valid(winnr) then
 			vim.api.nvim_win_close(winnr, true)
 		end
@@ -325,7 +303,6 @@ function M.highlight_conflicts(bufnr)
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	local state = "none"
 	local ours_start, theirs_start = nil, nil
-	local count = 0
 
 	for idx, line in ipairs(lines) do
 		local line_idx = idx - 1
@@ -333,7 +310,6 @@ function M.highlight_conflicts(bufnr)
 		if line:match("^<<<<<<<") then
 			state = "ours"
 			ours_start = line_idx
-			count = count + 1
 			vim.api.nvim_buf_set_extmark(bufnr, M.conflict_ns, line_idx, 0, {
 				line_hl_group = "GitCompanionMarker",
 			})
@@ -366,7 +342,6 @@ function M.highlight_conflicts(bufnr)
 			end
 		end
 	end
-	debug_log("highlight_conflicts: Marked " .. count .. " conflict block(s) in bufnr " .. bufnr)
 end
 
 --------------------------------------------------------------------------------
@@ -374,11 +349,11 @@ end
 --------------------------------------------------------------------------------
 
 function M.prompt_resolve_conflicts(filename, on_choice)
-	debug_log("prompt_resolve_conflicts triggered for file: " .. tostring(filename))
+	local clean_name = strip_ansi(filename)
 	local buf = vim.api.nvim_create_buf(false, true)
 
 	local lines = {
-		" Merge Conflict Detected in: " .. filename,
+		" Merge Conflict Detected in: " .. clean_name,
 		" Do you want to resolve conflicts now?",
 		"",
 		" [y] Yes, jump to conflicts   [n] No, skip",
@@ -417,13 +392,11 @@ function M.prompt_resolve_conflicts(filename, on_choice)
 	end
 
 	vim.keymap.set("n", "y", function()
-		debug_log("Prompt decision: Yes")
 		close()
 		on_choice(true)
 	end, { buffer = buf, silent = true, nowait = true })
 
 	vim.keymap.set("n", "n", function()
-		debug_log("Prompt decision: No")
 		close()
 		on_choice(false)
 	end, { buffer = buf, silent = true, nowait = true })
@@ -440,20 +413,21 @@ function M.prompt_resolve_conflicts(filename, on_choice)
 end
 
 function M.handle_merge_result(cmd_output, exit_code)
-	debug_log("handle_merge_result triggered with exit_code: " .. tostring(exit_code))
-	if exit_code ~= 0 and string.find(cmd_output, "CONFLICT") then
-		local conflicted_file = cmd_output:match("CONFLICT.-in%s+([%w_%.%-%/]+)")
-		debug_log("Parsed conflicted file: " .. tostring(conflicted_file))
+	local clean_output = strip_ansi(cmd_output)
+	if exit_code ~= 0 and string.find(clean_output, "CONFLICT") then
+		local conflicted_file = clean_output:match("CONFLICT.-in%s+([%w_%.%-%/]+)")
 
 		if type(close_floating) == "function" then
 			close_floating()
 		end
 
-		M.prompt_resolve_conflicts(conflicted_file, function(should_resolve)
-			if should_resolve and conflicted_file then
-				M.open_merge_conflict_resolver(conflicted_file)
-			end
-		end)
+		if conflicted_file then
+			M.prompt_resolve_conflicts(conflicted_file, function(should_resolve)
+				if should_resolve then
+					M.open_merge_conflict_resolver(conflicted_file)
+				end
+			end)
+		end
 	end
 end
 
@@ -469,7 +443,6 @@ vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter", "BufWritePost" }, {
 			return
 		end
 
-		-- Fixed: Start index changed from 1 to 0 to capture line 1
 		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 		local has_conflict = false
 		for _, line in ipairs(lines) do
