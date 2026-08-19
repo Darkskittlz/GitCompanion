@@ -37,9 +37,8 @@ function M.resolve_conflict_at_cursor(target_bufnr, mode)
 
 	local start_line, separator_line, end_line = nil, nil, nil
 
-	-- Find start marker above or at cursor
 	for i = cursor_line, 1, -1 do
-		if lines[i]:match("^<<<<<<<") then
+		if lines[i] and lines[i]:match("^<<<<<<<") then
 			start_line = i
 			break
 		end
@@ -50,7 +49,6 @@ function M.resolve_conflict_at_cursor(target_bufnr, mode)
 		return
 	end
 
-	-- Find separator and end marker below start_line
 	for i = start_line, #lines do
 		if lines[i]:match("^=======") and not separator_line then
 			separator_line = i
@@ -65,7 +63,6 @@ function M.resolve_conflict_at_cursor(target_bufnr, mode)
 		return
 	end
 
-	-- Extract selected block lines
 	local keep_lines = {}
 	if mode == "both" then
 		for i = start_line + 1, end_line - 1 do
@@ -85,15 +82,12 @@ function M.resolve_conflict_at_cursor(target_bufnr, mode)
 		end
 	end
 
-	-- Mutate actual buffer
 	vim.api.nvim_buf_set_lines(target_bufnr, start_line - 1, end_line, false, keep_lines)
 
-	-- Write directly to disk
 	vim.api.nvim_buf_call(target_bufnr, function()
 		vim.cmd("silent write")
 	end)
 
-	-- Check remaining conflicts
 	local remaining = vim.api.nvim_buf_get_lines(target_bufnr, 0, -1, false)
 	local has_more = false
 	for _, l in ipairs(remaining) do
@@ -109,27 +103,32 @@ function M.resolve_conflict_at_cursor(target_bufnr, mode)
 end
 
 function M.open_merge_conflict_resolver(file_path)
-	-- 1. Get or create actual file buffer
 	local target_bufnr = vim.fn.bufadd(file_path)
 	vim.fn.bufload(target_bufnr)
 
 	vim.bo[target_bufnr].modifiable = true
 
-	-- 2. Create floating window containing target_bufnr
+	local ui = vim.api.nvim_list_uis()[1]
+	local width = math.max(10, ui.width - 6)
+	local height = math.max(10, ui.height - 6)
+	local col = math.floor((ui.width - width) / 2)
+	local row = math.floor((ui.height - height) / 2)
+
 	local winnr = vim.api.nvim_open_win(target_bufnr, true, {
 		relative = "editor",
-		width = math.floor(vim.o.columns * 0.8),
-		height = math.floor(vim.o.lines * 0.8),
-		col = math.floor(vim.o.columns * 0.1),
-		row = math.floor(vim.o.lines * 0.1),
+		width = width,
+		height = height,
+		col = col,
+		row = row,
 		style = "minimal",
 		border = "rounded",
 		title = " Merge Conflict Resolver: " .. vim.fn.fnamemodify(file_path, ":t") .. " ",
 		title_pos = "center",
+		zindex = 700,
 	})
 
-	-- 3. Set up conflict keymaps directly on this floating buffer
-	M.setup_keymaps(target_bufnr)
+	M.setup_keymaps(target_bufnr, winnr)
+	M.highlight_conflicts(target_bufnr)
 end
 
 function M.highlight_conflicts(bufnr)
@@ -180,14 +179,50 @@ function M.highlight_conflicts(bufnr)
 	end
 end
 
-function M.setup_keymaps(bufnr)
+function M.setup_keymaps(bufnr, winnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	if vim.b[bufnr].gitcompanion_conflicts_mapped then
-		return
-	end
-
 	local opts = { buffer = bufnr, silent = true, noremap = true }
 
+	-- Disable standard Neovim editing / motion keys
+	local keys_to_disable = {
+		"i",
+		"I",
+		"a",
+		"A",
+		"o",
+		"O",
+		"r",
+		"R",
+		"c",
+		"C",
+		"s",
+		"S",
+		"d",
+		"x",
+		"X",
+		"p",
+		"P",
+		"u",
+		"<C-r>",
+		"v",
+		"V",
+		"<C-v>",
+		"w",
+		"b",
+		"e",
+		"ge",
+		"0",
+		"$",
+		"^",
+		"G",
+		"gg",
+		"<CR>",
+	}
+	for _, key in ipairs(keys_to_disable) do
+		vim.keymap.set("n", key, "<Nop>", opts)
+	end
+
+	-- Allowed navigation & action keys
 	vim.keymap.set("n", "<Space>", function()
 		M.resolve_conflict_at_cursor(bufnr, "auto")
 	end, opts)
@@ -196,19 +231,51 @@ function M.setup_keymaps(bufnr)
 		M.resolve_conflict_at_cursor(bufnr, "both")
 	end, opts)
 
-	vim.keymap.set("n", "j", function()
-		local found = vim.fn.search("^<<<<<<<", "W")
-		if found == 0 then
-			vim.fn.cursor(1, 1)
-			vim.fn.search("^<<<<<<<", "W")
+	vim.keymap.set("n", "q", function()
+		if winnr and vim.api.nvim_win_is_valid(winnr) then
+			vim.api.nvim_win_close(winnr, true)
 		end
 	end, opts)
 
+	-- Jump to NEXT conflict block
+	vim.keymap.set("n", "j", function()
+		local win = winnr and vim.api.nvim_win_is_valid(winnr) and winnr or 0
+		local cur_line = vim.api.nvim_win_get_cursor(win)[1]
+		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+		for i = cur_line + 1, #lines do
+			if lines[i]:match("^<<<<<<<") then
+				vim.api.nvim_win_set_cursor(win, { i, 0 })
+				return
+			end
+		end
+		-- Wrap around to top
+		for i = 1, cur_line do
+			if lines[i]:match("^<<<<<<<") then
+				vim.api.nvim_win_set_cursor(win, { i, 0 })
+				return
+			end
+		end
+	end, opts)
+
+	-- Jump to PREVIOUS conflict block
 	vim.keymap.set("n", "k", function()
-		local found = vim.fn.search("^<<<<<<<", "bW")
-		if found == 0 then
-			vim.fn.cursor(vim.api.nvim_buf_line_count(bufnr), 1)
-			vim.fn.search("^<<<<<<<", "bW")
+		local win = winnr and vim.api.nvim_win_is_valid(winnr) and winnr or 0
+		local cur_line = vim.api.nvim_win_get_cursor(win)[1]
+		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+		for i = cur_line - 1, 1, -1 do
+			if lines[i]:match("^<<<<<<<") then
+				vim.api.nvim_win_set_cursor(win, { i, 0 })
+				return
+			end
+		end
+		-- Wrap around to bottom
+		for i = #lines, cur_line, -1 do
+			if lines[i]:match("^<<<<<<<") then
+				vim.api.nvim_win_set_cursor(win, { i, 0 })
+				return
+			end
 		end
 	end, opts)
 
@@ -248,7 +315,7 @@ function M.prompt_resolve_conflicts(filename, on_choice)
 		border = "rounded",
 		title = " Merge Conflict ",
 		title_pos = "center",
-		zindex = 100,
+		zindex = 800,
 	})
 
 	vim.api.nvim_set_hl(0, "GitCompanionPromptKey", { fg = "#00d7ff", bold = true })
@@ -321,7 +388,6 @@ vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter", "BufWritePost" }, {
 
 		if has_conflict then
 			M.highlight_conflicts(bufnr)
-			M.setup_keymaps(bufnr)
 		else
 			vim.api.nvim_buf_clear_namespace(bufnr, M.conflict_ns, 0, -1)
 		end
