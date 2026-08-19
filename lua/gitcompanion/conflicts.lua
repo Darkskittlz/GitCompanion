@@ -21,6 +21,47 @@ local function safe_set_cursor(win, line, col)
 	pcall(vim.api.nvim_win_set_cursor, win, { target_line, col or 0 })
 end
 
+local KEYS_TO_CONTROL = {
+	"i",
+	"I",
+	"a",
+	"A",
+	"o",
+	"O",
+	"r",
+	"R",
+	"c",
+	"C",
+	"s",
+	"S",
+	"d",
+	"x",
+	"X",
+	"p",
+	"P",
+	"u",
+	"<C-r>",
+	"v",
+	"V",
+	"<C-v>",
+	"w",
+	"e",
+	"ge",
+	"0",
+	"$",
+	"^",
+	"G",
+	"gg",
+	"<CR>",
+	"H",
+	"L",
+	"j",
+	"k",
+	"<Space>",
+	"b",
+	"q",
+}
+
 --------------------------------------------------------------------------------
 -- CONFLICT RESOLUTION ENGINE
 --------------------------------------------------------------------------------
@@ -124,6 +165,7 @@ function M.resolve_conflict_at_cursor(target_bufnr, mode)
 	if not has_more then
 		vim.notify("All conflicts resolved in file!", vim.log.levels.INFO)
 		vim.api.nvim_buf_clear_namespace(target_bufnr, M.conflict_ns, 0, -1)
+		M.teardown_keymaps(target_bufnr)
 		if cur_win and vim.api.nvim_win_is_valid(cur_win) and vim.api.nvim_win_get_config(cur_win).relative ~= "" then
 			vim.api.nvim_win_close(cur_win, true)
 		end
@@ -149,7 +191,7 @@ function M.open_merge_conflict_resolver(file_path)
 
 	local ui = get_safe_ui()
 	local width = math.max(10, ui.width - 6)
-	local height = math.max(10, ui.height - 3) -- Decreased height by 1
+	local height = math.max(10, ui.height - 3)
 	local col = math.floor((ui.width - width) / 2)
 	local row = math.floor((ui.height - height) / 2)
 
@@ -169,6 +211,15 @@ function M.open_merge_conflict_resolver(file_path)
 	M.setup_keymaps(target_bufnr, winnr)
 	M.highlight_conflicts(target_bufnr)
 
+	-- Auto-teardown keymaps whenever floating window is closed
+	vim.api.nvim_create_autocmd("WinClosed", {
+		pattern = tostring(winnr),
+		once = true,
+		callback = function()
+			M.teardown_keymaps(target_bufnr)
+		end,
+	})
+
 	local lines = vim.api.nvim_buf_get_lines(target_bufnr, 0, -1, false)
 	for i, line in ipairs(lines) do
 		if line:match("^<<<<<<<") then
@@ -178,49 +229,27 @@ function M.open_merge_conflict_resolver(file_path)
 	end
 end
 
+function M.teardown_keymaps(bufnr)
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
+	if not vim.b[bufnr].gitcompanion_conflicts_mapped then
+		return
+	end
+
+	for _, key in ipairs(KEYS_TO_CONTROL) do
+		pcall(vim.keymap.del, "n", key, { buffer = bufnr })
+	end
+
+	vim.b[bufnr].gitcompanion_conflicts_mapped = nil
+	vim.b[bufnr].gitcompanion_active_win = nil
+end
+
 function M.setup_keymaps(bufnr, winnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	local opts = { buffer = bufnr, silent = true, noremap = true, nowait = true }
 
-	-- Re-bind keymaps to update current floating window reference
 	vim.b[bufnr].gitcompanion_active_win = winnr
 
-	local keys_to_disable = {
-		"i",
-		"I",
-		"a",
-		"A",
-		"o",
-		"O",
-		"r",
-		"R",
-		"c",
-		"C",
-		"s",
-		"S",
-		"d",
-		"x",
-		"X",
-		"p",
-		"P",
-		"u",
-		"<C-r>",
-		"v",
-		"V",
-		"<C-v>",
-		"w",
-		"e",
-		"ge",
-		"0",
-		"$",
-		"^",
-		"G",
-		"gg",
-		"<CR>",
-		"H",
-		"L",
-	}
-	for _, key in ipairs(keys_to_disable) do
+	for _, key in ipairs(KEYS_TO_CONTROL) do
 		vim.keymap.set("n", key, "<Nop>", opts)
 	end
 
@@ -250,7 +279,6 @@ function M.setup_keymaps(bufnr, winnr)
 		end
 	end, opts)
 
-	-- Line/Block level navigation for j
 	vim.keymap.set("n", "j", function()
 		local win = get_target_win()
 		local cur_line = vim.api.nvim_win_get_cursor(win)[1]
@@ -259,7 +287,6 @@ function M.setup_keymaps(bufnr, winnr)
 		if cur_line < #lines then
 			safe_set_cursor(win, cur_line + 1, 0)
 		else
-			-- Wrap around to first conflict marker
 			for i = 1, #lines do
 				if lines[i]:match("^<<<<<<<") then
 					safe_set_cursor(win, i, 0)
@@ -270,7 +297,6 @@ function M.setup_keymaps(bufnr, winnr)
 		M.highlight_conflicts(bufnr)
 	end, opts)
 
-	-- Line/Block level navigation for k
 	vim.keymap.set("n", "k", function()
 		local win = get_target_win()
 		local cur_line = vim.api.nvim_win_get_cursor(win)[1]
@@ -279,7 +305,6 @@ function M.setup_keymaps(bufnr, winnr)
 		if cur_line > 1 then
 			safe_set_cursor(win, cur_line - 1, 0)
 		else
-			-- Wrap around to last conflict marker
 			for i = #lines, 1, -1 do
 				if lines[i]:match("^<<<<<<<") then
 					safe_set_cursor(win, i, 0)
