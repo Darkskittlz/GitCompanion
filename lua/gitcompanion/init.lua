@@ -946,7 +946,7 @@ local function show_floating_pair(stdout_lines, stderr_lines)
    -- Apply a highlight group to colorize the output window (stdout)
    vim.api.nvim_buf_add_highlight(buf_out, -1, "GitOutput", 0, 0, -1)
 
-   local win_out = vim.api.nvim_open_win(buf_out, false, {
+   local win_out = vim.api.nvim_open_win(buf_out, true, {
       relative = "editor",
       width = width,
       height = h_out,
@@ -2805,12 +2805,11 @@ function M.toggle(opts)
                   local has_conflict = exit_code ~= 0 and string.find(full_output, "CONFLICT")
 
                   if has_conflict then
-                     -- Call the exported handler from M!
+                     -- 1. Route strictly to conflict prompt
                      conflicts.handle_merge_result(full_output, exit_code)
                   else
-                     if type(show_floating_pair) == "function" then
-                        show_floating_pair(stdout_lines, stderr_lines)
-                     end
+                     -- 2. Route strictly to standard output floats
+                     show_floating_pair(stdout_lines, stderr_lines)
                   end
                end)
             end,
