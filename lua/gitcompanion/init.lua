@@ -323,21 +323,89 @@ toggle_tree_node = function()
 	end
 end
 
+local function prompt_resolve_conflicts(filename, on_choice)
+	local buf = vim.api.nvim_create_buf(false, true)
+
+	local lines = {
+		" Merge Conflict Detected in: " .. filename,
+		" Do you want to resolve conflicts now?",
+		"",
+		" [y] Yes, jump to conflicts   [n] No, skip",
+	}
+
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+	vim.bo[buf].modifiable = false
+	vim.bo[buf].buftype = "nofile"
+
+	local ui = vim.api.nvim_list_uis()[1]
+	local w, h = 50, 6
+	local row = math.floor((ui.height - h) / 2)
+	local col = math.floor((ui.width - w) / 2)
+
+	local win = vim.api.nvim_open_win(buf, true, {
+		relative = "editor",
+		width = w,
+		height = h,
+		row = row,
+		col = col,
+		style = "minimal",
+		border = "rounded",
+		title = " Merge Conflict ",
+		title_pos = "center",
+		zindex = 100,
+	})
+
+	-- Focus highlight
+	vim.api.nvim_set_hl(0, "GitCompanionPromptKey", { fg = "#00d7ff", bold = true })
+	vim.api.nvim_buf_add_highlight(buf, -1, "GitCompanionPromptKey", 3, 2, 5)
+	vim.api.nvim_buf_add_highlight(buf, -1, "GitCompanionPromptKey", 3, 31, 34)
+
+	local function close()
+		if vim.api.nvim_win_is_valid(win) then
+			vim.api.nvim_win_close(win, true)
+		end
+	end
+
+	vim.keymap.set("n", "y", function()
+		close()
+		on_choice(true)
+	end, { buffer = buf, silent = true, nowait = true })
+
+	vim.keymap.set("n", "n", function()
+		close()
+		on_choice(false)
+	end, { buffer = buf, silent = true, nowait = true })
+
+	vim.keymap.set("n", "<Esc>", function()
+		close()
+		on_choice(false)
+	end, { buffer = buf, silent = true, nowait = true })
+
+	vim.keymap.set("n", "q", function()
+		close()
+		on_choice(false)
+	end, { buffer = buf, silent = true, nowait = true })
+end
+
 local function handle_merge_result(cmd_output, exit_code)
 	if exit_code ~= 0 and string.find(cmd_output, "CONFLICT") then
-		vim.ui.select({ "Yes", "No" }, {
-			prompt = "Merge conflicts detected! Resolve conflicts now?",
-		}, function(choice)
-			if choice == "Yes" then
+		prompt_resolve_conflicts(function(should_resolve)
+			if should_resolve then
 				Ui.mode = "files"
-				get_changed_files()
+				if type(get_changed_files) == "function" then
+					get_changed_files()
+				end
 
-				conflicts.highlight_conflicts(vim.api.nvim_get_current_buf())
-
-				if type(M.toggle) == "function" and not Ui.win then
+				-- Ensure main UI layout is open
+				if type(M.toggle) == "function" and (not Ui.diff_win or not vim.api.nvim_win_is_valid(Ui.diff_win)) then
 					M.toggle()
 				else
 					refresh_ui()
+				end
+
+				-- Direct focus into the Code Changes float window
+				if Ui.diff_win and vim.api.nvim_win_is_valid(Ui.diff_win) then
+					vim.api.nvim_set_current_win(Ui.diff_win)
 				end
 			end
 		end)
