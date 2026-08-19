@@ -324,105 +324,6 @@ toggle_tree_node = function()
    end
 end
 
-local function prompt_resolve_conflicts(filename, on_choice)
-   local buf = vim.api.nvim_create_buf(false, true)
-
-   local lines = {
-      " Merge Conflict Detected in: " .. filename,
-      " Do you want to resolve conflicts now?",
-      "",
-      " [y] Yes, jump to conflicts   [n] No, skip",
-   }
-
-   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-   vim.bo[buf].modifiable = false
-   vim.bo[buf].buftype = "nofile"
-
-   local ui = vim.api.nvim_list_uis()[1]
-   local w, h = 50, 6
-   local row = math.floor((ui.height - h) / 2)
-   local col = math.floor((ui.width - w) / 2)
-
-   local win = vim.api.nvim_open_win(buf, true, {
-      relative = "editor",
-      width = w,
-      height = h,
-      row = row,
-      col = col,
-      style = "minimal",
-      border = "rounded",
-      title = " Merge Conflict ",
-      title_pos = "center",
-      zindex = 100,
-   })
-
-   -- Focus highlight
-   vim.api.nvim_set_hl(0, "GitCompanionPromptKey", { fg = "#00d7ff", bold = true })
-   vim.api.nvim_buf_add_highlight(buf, -1, "GitCompanionPromptKey", 3, 2, 5)
-   vim.api.nvim_buf_add_highlight(buf, -1, "GitCompanionPromptKey", 3, 31, 34)
-
-   local function close()
-      if vim.api.nvim_win_is_valid(win) then
-         vim.api.nvim_win_close(win, true)
-      end
-   end
-
-   vim.keymap.set("n", "y", function()
-      close()
-      on_choice(true)
-   end, { buffer = buf, silent = true, nowait = true })
-
-   vim.keymap.set("n", "n", function()
-      close()
-      on_choice(false)
-   end, { buffer = buf, silent = true, nowait = true })
-
-   vim.keymap.set("n", "<Esc>", function()
-      close()
-      on_choice(false)
-   end, { buffer = buf, silent = true, nowait = true })
-
-   vim.keymap.set("n", "q", function()
-      close()
-      on_choice(false)
-   end, { buffer = buf, silent = true, nowait = true })
-end
-
-local function handle_merge_result(cmd_output, exit_code)
-   if exit_code ~= 0 and string.find(cmd_output, "CONFLICT") then
-      local conflicted_file = cmd_output:match("CONFLICT.-in%s+([%w_%.%-%/]+)")
-
-      -- Close the stdout/stderr floats if they are currently open
-      if type(close_floating) == "function" then
-         close_floating()
-      end
-
-      prompt_resolve_conflicts(conflicted_file, function(should_resolve)
-         if should_resolve then
-            Ui.mode = "files"
-
-            if type(get_changed_files) == "function" then
-               get_changed_files()
-            end
-
-            -- Use M.refresh_ui or M.toggle safely
-            if type(M.toggle) == "function" and (not Ui.diff_win or not vim.api.nvim_win_is_valid(Ui.diff_win)) then
-               M.toggle()
-            elseif type(M.refresh_ui) == "function" then
-               M.refresh_ui()
-            elseif type(refresh_ui) == "function" then
-               refresh_ui()
-            end
-
-            -- Target the Code Changes buffer/window directly
-            if Ui.diff_win and vim.api.nvim_win_is_valid(Ui.diff_win) then
-               vim.api.nvim_set_current_win(Ui.diff_win)
-            end
-         end
-      end)
-   end
-end
-
 -- Helper to parse rename paths from git status or diff
 local function parse_file_status(line)
    if #line < 4 then
@@ -2896,16 +2797,22 @@ function M.toggle(opts)
                stderr_lines = data or {}
             end,
             on_exit = function(_, exit_code)
-               -- Show floating windows with the output and error messages
-               show_floating_pair(stdout_lines or {}, stderr_lines or {})
+               vim.schedule(function()
+                  local stdout_str = table.concat(stdout_lines or {}, "\n")
+                  local stderr_str = table.concat(stderr_lines or {}, "\n")
+                  local full_output = stdout_str .. "\n" .. stderr_str
 
-               -- After pulling, handle success or failure
-               if exit_code == 0 then
-                  show_centered_message("✅ Pulled latest changes for branch: " .. branch, vim.log.levels.INFO)
-               else
-                  show_centered_message("❌ Failed to pull for branch: " .. branch, vim.log.levels.ERROR)
-               end
-               refresh_ui()
+                  local has_conflict = exit_code ~= 0 and string.find(full_output, "CONFLICT")
+
+                  if has_conflict then
+                     -- Call the exported handler from M!
+                     conflicts.handle_merge_result(full_output, exit_code)
+                  else
+                     if type(show_floating_pair) == "function" then
+                        show_floating_pair(stdout_lines, stderr_lines)
+                     end
+                  end
+               end)
             end,
          })
 
