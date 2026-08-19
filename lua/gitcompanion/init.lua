@@ -1016,6 +1016,12 @@ end, { buffer = buf_err, nowait = true, silent = true })
 
 -- Show output and error windows in floating style
 local function show_floating_pair(stdout_lines, stderr_lines)
+   -- Check if either output stream contains a merge conflict
+   local full_text = table.concat(stdout_lines or {}, "\n") .. "\n" .. table.concat(stderr_lines or {}, "\n")
+   if string.find(full_text, "CONFLICT") then
+      return -- Skip rendering Git Output/Errors windows completely
+   end
+
    save_active_window()
 
    local ui = vim.api.nvim_list_uis()[1]
@@ -3673,12 +3679,16 @@ function M.toggle(opts)
                      local stderr_str = table.concat(stderr_lines or {}, "\n")
                      local full_output = stdout_str .. "\n" .. stderr_str
 
-                     -- Trigger the resolution prompt
-                     handle_merge_result(full_output, exit_code)
+                     local has_conflict = exit_code ~= 0 and string.find(full_output, "CONFLICT")
 
-                     -- Optional output display
-                     if type(show_floating_pair) == "function" then
-                        show_floating_pair(stdout_lines, stderr_lines)
+                     if has_conflict then
+                        -- Trigger conflict resolution UI directly
+                        handle_merge_result(full_output, exit_code)
+                     else
+                        -- Only show output/error floats if there are NO conflicts
+                        if type(show_floating_pair) == "function" then
+                           show_floating_pair(stdout_lines, stderr_lines)
+                        end
                      end
                   end)
                end,
