@@ -696,7 +696,7 @@ local function get_all_child_paths(node)
    return paths
 end
 
--- test
+-- ultimate test to test merge conflict resolver bro!
 
 -- Helper 2: Fetch combined git diff for multiple file paths
 local function get_diff_for_paths(paths)
@@ -3478,7 +3478,6 @@ function M.toggle(opts)
          vim.api.nvim_win_set_option(win_desc, "cursorline", false)
          vim.api.nvim_win_set_cursor(win_desc, { 1, 0 })
 
-         -- test
          -- RENDER FUNCTION
          local function render()
             local lines = {}
@@ -3519,8 +3518,6 @@ function M.toggle(opts)
             Ui.mode = "branches"
             refresh_ui()
          end
-
-         -- test
 
          local function apply_selected()
             local opt = options[selected]
