@@ -14,6 +14,7 @@ local refresh_ui
 -- TODO: Create Merge Conflict Resolver
 -- TODO: Fix merging files or dropping files not refreshing to show most up to date file info.
 -- TODO: Fix space checkout out branch immediately without needing to press j/k to navigate
+-- TODO: Reverting to a prior commit isn't working
 
 -- Highlights
 vim.api.nvim_set_hl(0, "GitBranchCurrent", { fg = "#549afc" })
