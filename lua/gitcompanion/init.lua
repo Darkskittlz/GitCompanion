@@ -315,6 +315,289 @@ toggle_tree_node = function()
    end
 end
 
+local function parse_conflict_blocks(bufnr)
+   bufnr = bufnr or 0
+   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+   local conflicts = {}
+   local current = nil
+
+   vim.notify("[GitCompanion Debug] Parsing buffer #" .. bufnr .. " (" .. #lines .. " lines)", vim.log.levels.DEBUG)
+
+   for idx, line in ipairs(lines) do
+      if line:match("^<<<<<<<") then
+         current = { start_line = idx, ours_start = idx + 1 }
+      elseif line:match("^=======") and current then
+         current.ours_end = idx - 1
+         current.theirs_start = idx + 1
+      elseif line:match("^>>>>>>>") and current then
+         current.theirs_end = idx - 1
+         current.end_line = idx
+         table.insert(conflicts, current)
+         current = nil
+      end
+   end
+
+   vim.notify("[GitCompanion Debug] Found " .. #conflicts .. " conflict block(s)", vim.log.levels.DEBUG)
+   return conflicts
+end
+
+-- 1. DEFINE RESOLVER FIRST
+local function resolve_conflict_at_cursor(choice)
+   local bufnr = vim.api.nvim_get_current_buf()
+   local cursor_line = vim.api.nvim_win_get_cursor(0)[1]
+   vim.notify(
+      string.format(
+         "[GitCompanion Debug] Resolving conflict (Choice: %s, Line: %d, Buf: %d)",
+         choice,
+         cursor_line,
+         bufnr
+      ),
+      vim.log.levels.INFO
+   )
+
+   local conflicts = parse_conflict_blocks(bufnr)
+
+   local target = nil
+   for _, c in ipairs(conflicts) do
+      if cursor_line >= c.start_line and cursor_line <= c.end_line then
+         target = c
+         break
+      end
+   end
+
+   if not target then
+      vim.notify("[GitCompanion Debug] Cursor is not inside a merge conflict block", vim.log.levels.WARN)
+      return
+   end
+
+   if choice == "auto" then
+      if cursor_line <= (target.ours_end or target.start_line) then
+         choice = "ours"
+      else
+         choice = "theirs"
+      end
+      vim.notify("[GitCompanion Debug] 'auto' resolved choice to: " .. choice, vim.log.levels.INFO)
+   end
+
+   local replacement = {}
+   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+
+   if choice == "ours" then
+      for i = target.ours_start, target.ours_end do
+         table.insert(replacement, lines[i])
+      end
+   elseif choice == "theirs" then
+      for i = target.theirs_start, target.theirs_end do
+         table.insert(replacement, lines[i])
+      end
+   elseif choice == "both" then
+      for i = target.ours_start, target.ours_end do
+         table.insert(replacement, lines[i])
+      end
+      for i = target.theirs_start, target.theirs_end do
+         table.insert(replacement, lines[i])
+      end
+   end
+
+   vim.notify(
+      "[GitCompanion Debug] Replacing conflict block (Lines "
+      .. target.start_line
+      .. "-"
+      .. target.end_line
+      .. ") with "
+      .. #replacement
+      .. " line(s)",
+      vim.log.levels.DEBUG
+   )
+
+   local is_modifiable = vim.api.nvim_get_option_value("modifiable", { buf = bufnr })
+   if not is_modifiable then
+      vim.notify("[GitCompanion Debug] Buffer was read-only; temporarily unlocking modifiable", vim.log.levels.WARN)
+      vim.api.nvim_set_option_value("modifiable", true, { buf = bufnr })
+   end
+
+   vim.api.nvim_buf_set_lines(bufnr, target.start_line - 1, target.end_line, false, replacement)
+
+   if not is_modifiable then
+      vim.api.nvim_set_option_value("modifiable", false, { buf = bufnr })
+   end
+   vim.notify("[GitCompanion Debug] Conflict successfully replaced!", vim.log.levels.INFO)
+end
+
+-- 2. DEFINE HIGHLIGHTS & NAMESPACE
+local conflict_ns = vim.api.nvim_create_namespace("gitcompanion_conflicts")
+
+vim.api.nvim_set_hl(0, "GitCompanionOurs", { bg = "#2e3f33", default = true })
+vim.api.nvim_set_hl(0, "GitCompanionTheirs", { bg = "#23374d", default = true })
+vim.api.nvim_set_hl(0, "GitCompanionMarker", { bg = "#444444", bold = true, default = true })
+
+local function highlight_conflicts(bufnr)
+   bufnr = bufnr or vim.api.nvim_get_current_buf()
+   vim.notify("[GitCompanion Debug] Highlighting conflicts in buffer #" .. bufnr, vim.log.levels.DEBUG)
+   vim.api.nvim_buf_clear_namespace(bufnr, conflict_ns, 0, -1)
+
+   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+   local state = "none"
+   local ours_start, theirs_start = nil, nil
+
+   for idx, line in ipairs(lines) do
+      local line_idx = idx - 1
+
+      if line:match("^<<<<<<<") then
+         state = "ours"
+         ours_start = line_idx
+         vim.api.nvim_buf_set_extmark(bufnr, conflict_ns, line_idx, 0, {
+            line_hl_group = "GitCompanionMarker",
+         })
+      elseif line:match("^=======") and state == "ours" then
+         state = "theirs"
+         theirs_start = line_idx
+         vim.api.nvim_buf_set_extmark(bufnr, conflict_ns, line_idx, 0, {
+            line_hl_group = "GitCompanionMarker",
+         })
+
+         if ours_start then
+            for l = ours_start + 1, line_idx - 1 do
+               vim.api.nvim_buf_set_extmark(bufnr, conflict_ns, l, 0, {
+                  line_hl_group = "GitCompanionOurs",
+               })
+            end
+         end
+      elseif line:match("^>>>>>>>") and state == "theirs" then
+         state = "none"
+         vim.api.nvim_buf_set_extmark(bufnr, conflict_ns, line_idx, 0, {
+            line_hl_group = "GitCompanionMarker",
+         })
+
+         if theirs_start then
+            for l = theirs_start + 1, line_idx - 1 do
+               vim.api.nvim_buf_set_extmark(bufnr, conflict_ns, l, 0, {
+                  line_hl_group = "GitCompanionTheirs",
+               })
+            end
+         end
+      end
+   end
+end
+
+-- 3. DEFINE KEYMAPS (Referencing resolve_conflict_at_cursor and highlight_conflicts)
+local function setup_conflict_keymaps(bufnr)
+   if vim.b[bufnr].gitcompanion_conflicts_mapped then
+      vim.notify("[GitCompanion Debug] Conflict keymaps already set up for buffer #" .. bufnr, vim.log.levels.DEBUG)
+      return
+   end
+
+   vim.notify(
+      "[GitCompanion Debug] Setting up conflict resolution keymaps (<Space>, b, j, k) for buffer #" .. bufnr,
+      vim.log.levels.INFO
+   )
+   local opts = { buffer = bufnr, silent = true, noremap = true }
+
+   vim.keymap.set("n", "<Space>", function()
+      vim.notify("[GitCompanion Debug] Keymap triggered: <Space> (auto resolve)", vim.log.levels.DEBUG)
+      resolve_conflict_at_cursor("auto")
+      highlight_conflicts(bufnr)
+   end, opts)
+
+   vim.keymap.set("n", "b", function()
+      vim.notify("[GitCompanion Debug] Keymap triggered: b (both)", vim.log.levels.DEBUG)
+      resolve_conflict_at_cursor("both")
+      highlight_conflicts(bufnr)
+   end, opts)
+
+   vim.keymap.set("n", "j", function()
+      vim.notify("[GitCompanion Debug] Keymap triggered: j (next conflict)", vim.log.levels.DEBUG)
+      local found = vim.fn.search("^<<<<<<<", "W")
+      if found == 0 then
+         vim.fn.cursor(1, 1)
+         vim.fn.search("^<<<<<<<", "W")
+      end
+   end, opts)
+
+   vim.keymap.set("n", "k", function()
+      vim.notify("[GitCompanion Debug] Keymap triggered: k (prev conflict)", vim.log.levels.DEBUG)
+      local found = vim.fn.search("^<<<<<<<", "bW")
+      if found == 0 then
+         vim.fn.cursor(vim.api.nvim_buf_line_count(bufnr), 1)
+         vim.fn.search("^<<<<<<<", "bW")
+      end
+   end, opts)
+
+   vim.b[bufnr].gitcompanion_conflicts_mapped = true
+end
+
+-- 4. MERGE HANDLER
+local function handle_merge_result(cmd_output, exit_code)
+   vim.notify(
+      string.format("[GitCompanion Debug] handle_merge_result called (exit_code: %s)", tostring(exit_code)),
+      vim.log.levels.INFO
+   )
+   vim.notify("[GitCompanion Debug] Command output:\n" .. cmd_output, vim.log.levels.DEBUG)
+
+   if exit_code ~= 0 and string.find(cmd_output, "CONFLICT") then
+      vim.notify(
+         "[GitCompanion Debug] Merge conflict detected in command output! Prompting user...",
+         vim.log.levels.INFO
+      )
+      vim.ui.select({ "Yes", "No" }, {
+         prompt = "Merge conflicts detected! Resolve conflicts now?",
+      }, function(choice)
+         vim.notify("[GitCompanion Debug] User choice: " .. tostring(choice), vim.log.levels.INFO)
+         if choice == "Yes" then
+            Ui.mode = "files"
+            if type(get_changed_files) == "function" then
+               vim.notify("[GitCompanion Debug] Fetching changed files...", vim.log.levels.DEBUG)
+               get_changed_files()
+            end
+            if type(M.toggle) == "function" and not Ui.win then
+               vim.notify("[GitCompanion Debug] Opening GitCompanion UI...", vim.log.levels.DEBUG)
+               M.toggle()
+            else
+               vim.notify("[GitCompanion Debug] Refreshing GitCompanion UI...", vim.log.levels.DEBUG)
+               refresh_ui()
+            end
+         end
+      end)
+   else
+      vim.notify("[GitCompanion Debug] No conflict pattern matched or exit_code was 0", vim.log.levels.WARN)
+   end
+end
+
+-- 5. AUTOCMD ATTACHMENT
+vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter", "BufWritePost" }, {
+   group = vim.api.nvim_create_augroup("GitCompanionConflictHL", { clear = true }),
+   callback = function(args)
+      local bufnr = args.buf
+      if not vim.api.nvim_buf_is_valid(bufnr) then
+         return
+      end
+
+      local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+      local has_conflict = false
+      for _, line in ipairs(lines) do
+         if line:match("^<<<<<<<") then
+            has_conflict = true
+            break
+         end
+      end
+
+      if has_conflict then
+         vim.notify(
+            "[GitCompanion Debug] Conflict markers found in buffer #"
+            .. bufnr
+            .. " via autocmd ("
+            .. args.event
+            .. ")",
+            vim.log.levels.INFO
+         )
+         highlight_conflicts(bufnr)
+         setup_conflict_keymaps(bufnr)
+      else
+         vim.api.nvim_buf_clear_namespace(bufnr, conflict_ns, 0, -1)
+      end
+   end,
+})
+
 -- Helper to parse rename paths from git status or diff
 local function parse_file_status(line)
    if #line < 4 then
@@ -3536,14 +3819,27 @@ function M.toggle(opts)
                stdout_buffered = true,
                stderr_buffered = true,
                on_stdout = function(_, data)
-                  stdout_lines = data or {}
+                  if data then
+                     vim.list_extend(stdout_lines, data)
+                  end
                end,
                on_stderr = function(_, data)
-                  stderr_lines = data or {}
+                  if data then
+                     vim.list_extend(stderr_lines, data)
+                  end
                end,
-               on_exit = function()
-                  -- Use the floating window function here
-                  show_floating_pair(stdout_lines or {}, stderr_lines or {})
+               on_exit = function(_, exit_code)
+                  vim.schedule(function()
+                     local output = table.concat(stdout_lines, "\n") .. "\n" .. table.concat(stderr_lines, "\n")
+
+                     -- Trigger the resolution prompt if Git returned a non-zero exit code with CONFLICT
+                     handle_merge_result(output, exit_code)
+
+                     -- Still show standard output/error floating window if desired
+                     if type(show_floating_pair) == "function" then
+                        show_floating_pair(stdout_lines or {}, stderr_lines or {})
+                     end
+                  end)
                end,
             })
          end
