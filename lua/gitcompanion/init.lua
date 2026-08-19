@@ -696,6 +696,8 @@ local function get_all_child_paths(node)
    return paths
 end
 
+-- test
+
 -- Helper 2: Fetch combined git diff for multiple file paths
 local function get_diff_for_paths(paths)
    if #paths == 0 then
