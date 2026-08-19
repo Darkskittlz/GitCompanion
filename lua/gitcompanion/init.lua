@@ -3589,7 +3589,7 @@ function M.toggle(opts)
 
                      if has_conflict then
                         -- Trigger conflict resolution UI directly
-                        handle_merge_result(full_output, exit_code)
+                        conflicts.handle_merge_result(full_output, exit_code)
                      else
                         -- Only show output/error floats if there are NO conflicts
                         if type(show_floating_pair) == "function" then
