@@ -14,9 +14,6 @@ local refresh_ui
 -- TODO: Fix merging files or dropping files not refreshing to show most up to date file info.
 -- TODO: Fix space checkout out branch immediately without needing to press j/k to navigate
 -- TODO: Reverting to a prior commit isn't working
---
---
--- comment
 
 -- Highlights
 vim.api.nvim_set_hl(0, "GitBranchCurrent", { fg = "#549afc" })
@@ -2063,6 +2060,7 @@ function M.toggle(opts)
 		end
 
 		-- G keymap for reset/rebase options on commits
+		-- G keymap for reset/rebase options on commits
 		vim.keymap.set("n", "g", function()
 			if Ui.mode ~= "branches" then
 				return
@@ -2075,7 +2073,9 @@ function M.toggle(opts)
 
 			local cursor = vim.api.nvim_win_get_cursor(Ui.right_win)
 			local line = vim.api.nvim_buf_get_lines(Ui.right_buf, cursor[1] - 1, cursor[1], false)[1] or ""
-			local hash = line:match("^(%S+)")
+
+			-- Extract hex commit hash anywhere on line (handles bullet points, tree characters, icons)
+			local hash = line:match("(%x%x%x%x%x%x%x+)")
 			if not hash then
 				return
 			end
@@ -2114,7 +2114,6 @@ function M.toggle(opts)
 					desc = "Reset HEAD to this commit, keeping changes unstaged.",
 					cmd = "git reset --mixed " .. hash,
 				},
-
 				{
 					key = "s",
 					label = "Soft reset",
@@ -2122,7 +2121,6 @@ function M.toggle(opts)
 					desc = "Reset HEAD to this commit, keeping all changes staged.",
 					cmd = "git reset --soft " .. hash,
 				},
-
 				{
 					key = "h",
 					label = "Hard reset",
@@ -2130,7 +2128,6 @@ function M.toggle(opts)
 					desc = "Fully reset working tree & index to this commit.",
 					cmd = "git reset --hard " .. hash,
 				},
-
 				{
 					key = "c",
 					label = "Cancel",
@@ -2147,7 +2144,7 @@ function M.toggle(opts)
 			---------------------------------------------------------------------------
 			local ui = vim.api.nvim_list_uis()[1]
 			local width = 52
-			local height = #options + 2 -- FIX: removed the extra blank line
+			local height = #options + 2
 
 			local row = math.floor((ui.height - height) / 2)
 			local col = math.floor((ui.width - width) / 2)
@@ -2187,7 +2184,7 @@ function M.toggle(opts)
 				local lines = {}
 
 				for i, opt in ipairs(options) do
-					local prefix = (i == selected) and " " or "  "
+					local prefix = (i == selected) and " " or "  "
 					lines[#lines + 1] = prefix .. opt.label
 				end
 
@@ -2243,16 +2240,15 @@ function M.toggle(opts)
 					return
 				end
 
-				if has_worktree_changes() then
-					local show_error = make_show_error(row, height, ui)
-					show_error("Cannot reset: work tree has uncommitted changes")
-					return
+				-- Execute git command directly without worktree check blockage
+				local out = vim.fn.system(opt.cmd)
+
+				if vim.v.shell_error ~= 0 then
+					vim.notify("Git error: " .. out, vim.log.levels.ERROR)
+				else
+					local msg = opt.label .. " → " .. hash
+					vim.notify(msg, vim.log.levels.INFO)
 				end
-
-				vim.fn.system(opt.cmd)
-
-				local msg = opt.label .. " → " .. hash
-				vim.notify(msg, vim.log.levels.INFO)
 
 				close_all()
 			end
@@ -2277,12 +2273,6 @@ function M.toggle(opts)
 					end, { buffer = buf, noremap = true, silent = true })
 				end
 			end
-
-			---------------------------------------------------------------------------
-			-- EXIT
-			---------------------------------------------------------------------------
-			vim.keymap.set("n", "q", close_all, { buffer = buf })
-			vim.keymap.set("n", "<Esc>", close_all, { buffer = buf })
 		end, { buffer = Ui.right_buf, noremap = true, silent = true })
 
 		-- keymap for dropping commits
