@@ -979,8 +979,6 @@ local function get_all_child_paths(node)
    return paths
 end
 
--- test
-
 -- Helper 2: Fetch combined git diff for multiple file paths
 local function get_diff_for_paths(paths)
    if #paths == 0 then
@@ -3761,7 +3759,6 @@ function M.toggle(opts)
          vim.api.nvim_win_set_option(win_desc, "cursorline", false)
          vim.api.nvim_win_set_cursor(win_desc, { 1, 0 })
 
-         -- test
          -- RENDER FUNCTION
          local function render()
             local lines = {}
@@ -3803,8 +3800,6 @@ function M.toggle(opts)
             refresh_ui()
          end
 
-         -- test
-
          local function apply_selected()
             local opt = options[selected]
             if not opt.cmd then
@@ -3814,33 +3809,45 @@ function M.toggle(opts)
 
             close_all() -- close main popup first
 
-            local stdout_lines = nil
-            local stderr_lines = nil
+            -- 1. Ensure tables are explicitly instantiated outside callbacks
+            local stdout_lines = {}
+            local stderr_lines = {}
 
             -- run merge asynchronously
             vim.fn.jobstart(opt.cmd, {
                stdout_buffered = true,
                stderr_buffered = true,
                on_stdout = function(_, data)
-                  if data then
-                     vim.list_extend(stdout_lines, data)
+                  if data and #data > 0 then
+                     for _, line in ipairs(data) do
+                        if line ~= "" then
+                           table.insert(stdout_lines, line)
+                        end
+                     end
                   end
                end,
                on_stderr = function(_, data)
-                  if data then
-                     vim.list_extend(stderr_lines, data)
+                  if data and #data > 0 then
+                     for _, line in ipairs(data) do
+                        if line ~= "" then
+                           table.insert(stderr_lines, line)
+                        end
+                     end
                   end
                end,
                on_exit = function(_, exit_code)
                   vim.schedule(function()
-                     local output = table.concat(stdout_lines, "\n") .. "\n" .. table.concat(stderr_lines, "\n")
+                     -- Safe fallback concatenation
+                     local stdout_str = table.concat(stdout_lines or {}, "\n")
+                     local stderr_str = table.concat(stderr_lines or {}, "\n")
+                     local full_output = stdout_str .. "\n" .. stderr_str
 
-                     -- Trigger the resolution prompt if Git returned a non-zero exit code with CONFLICT
-                     handle_merge_result(output, exit_code)
+                     -- Trigger the resolution prompt
+                     handle_merge_result(full_output, exit_code)
 
-                     -- Still show standard output/error floating window if desired
+                     -- Optional output display
                      if type(show_floating_pair) == "function" then
-                        show_floating_pair(stdout_lines or {}, stderr_lines or {})
+                        show_floating_pair(stdout_lines, stderr_lines)
                      end
                   end)
                end,
