@@ -1534,16 +1534,20 @@ local function checkout_branch()
 
    -- Update internal state
    Ui.branch_selected = branch
-   show_centered_message("Switched to branch: " .. branch, "✅")
 
-   -- Reload branch list (this automatically sorts the new current branch to the top)
-   load_branches()
+   -- Reload branch list (sorts active branch to top)
+   if type(load_branches) == "function" then
+      load_branches()
+   end
 
-   -- Reset selection to the top since the checked-out branch is now at index 1
+   -- Reset selection index to top active branch
    Ui.selected_index = 1
 
-   -- Redraw all panes
+   -- 1. Refresh UI first while main window retains focus
    refresh_ui()
+
+   -- 2. Display completion message on top of refreshed UI
+   show_centered_message("Switched to branch: " .. branch, "✅")
 end
 
 -- Delete the selected branch
