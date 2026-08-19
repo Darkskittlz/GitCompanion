@@ -11,9 +11,6 @@ local get_changed_files
 local ns_id
 local refresh_ui
 
--- TODO: Fix merging files or dropping files not refreshing to show most up to date file info.
--- TODO: Fix space checkout out branch immediately without needing to press j/k to navigate
-
 -- Highlights
 vim.api.nvim_set_hl(0, "GitBranchCurrent", { fg = "#549afc" })
 vim.api.nvim_set_hl(0, "GitUnstaged", { fg = "#f99c67", bold = true, italic = true })
