@@ -2708,7 +2708,7 @@ function M.toggle(opts)
          vim.api.nvim_buf_set_option(buf_diff, "bufhidden", "wipe")
          vim.api.nvim_buf_set_option(buf_diff, "filetype", "diff")
 
-         local diff_cmd = "git diff --cached " .. vim.fn.shellescape(branch)
+         local diff_cmd = "git diff --cached"
          local diff_lines = vim.fn.systemlist(diff_cmd)
          if vim.v.shell_error ~= 0 or #diff_lines == 0 then
             diff_lines = { "[No staged changes]" }
