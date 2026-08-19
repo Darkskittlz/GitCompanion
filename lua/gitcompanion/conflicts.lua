@@ -168,7 +168,13 @@ function M.open_merge_conflict_resolver(file_path)
 	vim.api.nvim_buf_set_lines(float_bufnr, 0, -1, false, file_lines)
 
 	-- Set filetype by extension manually to avoid relying on unlinked buffers
-	local ft = vim.filetype.detect({ filename = full_path })
+	local ft = nil
+	if vim.filetype.match then
+		ft = vim.filetype.match({ filename = full_path })
+	elseif vim.filetype.detect then
+		ft = vim.filetype.detect({ filename = full_path })
+	end
+
 	if ft then
 		vim.bo[float_bufnr].filetype = ft
 	end
