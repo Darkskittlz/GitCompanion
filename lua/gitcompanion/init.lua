@@ -11,7 +11,6 @@ local get_changed_files
 local ns_id
 local refresh_ui
 
--- TODO: Create Merge Conflict Resolver
 -- TODO: Fix merging files or dropping files not refreshing to show most up to date file info.
 -- TODO: Fix space checkout out branch immediately without needing to press j/k to navigate
 -- TODO: Reverting to a prior commit isn't working
