@@ -21,80 +21,27 @@ local function safe_set_cursor(win, line, col)
 	pcall(vim.api.nvim_win_set_cursor, win, { target_line, col or 0 })
 end
 
-local KEYS_TO_CONTROL = {
-	"i",
-	"I",
-	"a",
-	"A",
-	"o",
-	"O",
-	"r",
-	"R",
-	"c",
-	"C",
-	"s",
-	"S",
-	"d",
-	"x",
-	"X",
-	"p",
-	"P",
-	"u",
-	"<C-r>",
-	"v",
-	"V",
-	"<C-v>",
-	"w",
-	"e",
-	"ge",
-	"0",
-	"$",
-	"^",
-	"G",
-	"gg",
-	"<CR>",
-	"H",
-	"L",
-	"j",
-	"k",
-	"<Space>",
-	"b",
-	"q",
-}
-
 --------------------------------------------------------------------------------
 -- CONFLICT RESOLUTION ENGINE
 --------------------------------------------------------------------------------
 
-function M.parse_conflict_blocks(bufnr)
-	bufnr = bufnr or 0
-	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	local conflicts = {}
-	local current = nil
-
-	for idx, line in ipairs(lines) do
-		if line:match("^<<<<<<<") then
-			current = { start_line = idx, ours_start = idx + 1 }
-		elseif line:match("^=======") and current then
-			current.ours_end = idx - 1
-			current.theirs_start = idx + 1
-		elseif line:match("^>>>>>>>") and current then
-			current.theirs_end = idx - 1
-			current.end_line = idx
-			table.insert(conflicts, current)
-			current = nil
-		end
+function M.sync_to_target_file(float_bufnr, target_bufnr)
+	if not vim.api.nvim_buf_is_valid(float_bufnr) or not vim.api.nvim_buf_is_valid(target_bufnr) then
+		return
 	end
-	return conflicts
+	local lines = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
+	vim.bo[target_bufnr].modifiable = true
+	vim.api.nvim_buf_set_lines(target_bufnr, 0, -1, false, lines)
+	vim.api.nvim_buf_call(target_bufnr, function()
+		vim.cmd("silent write")
+	end)
 end
 
-function M.resolve_conflict_at_cursor(target_bufnr, mode)
-	target_bufnr = (not target_bufnr or target_bufnr == 0) and vim.api.nvim_get_current_buf() or target_bufnr
+function M.resolve_conflict_at_cursor(float_bufnr, target_bufnr, mode)
 	mode = mode or "auto"
-
 	local cur_win = vim.api.nvim_get_current_win()
 	local cursor_line = vim.api.nvim_win_get_cursor(cur_win)[1]
-	local lines = vim.api.nvim_buf_get_lines(target_bufnr, 0, -1, false)
+	local lines = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
 
 	local start_line, separator_line, end_line = nil, nil, nil
 
@@ -143,13 +90,10 @@ function M.resolve_conflict_at_cursor(target_bufnr, mode)
 		end
 	end
 
-	vim.api.nvim_buf_set_lines(target_bufnr, start_line - 1, end_line, false, keep_lines)
+	vim.api.nvim_buf_set_lines(float_bufnr, start_line - 1, end_line, false, keep_lines)
+	M.sync_to_target_file(float_bufnr, target_bufnr)
 
-	vim.api.nvim_buf_call(target_bufnr, function()
-		vim.cmd("silent write")
-	end)
-
-	local remaining = vim.api.nvim_buf_get_lines(target_bufnr, 0, -1, false)
+	local remaining = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
 	local has_more = false
 	local next_conflict_line = nil
 
@@ -164,8 +108,6 @@ function M.resolve_conflict_at_cursor(target_bufnr, mode)
 
 	if not has_more then
 		vim.notify("All conflicts resolved in file!", vim.log.levels.INFO)
-		vim.api.nvim_buf_clear_namespace(target_bufnr, M.conflict_ns, 0, -1)
-		M.teardown_keymaps(target_bufnr)
 		if cur_win and vim.api.nvim_win_is_valid(cur_win) and vim.api.nvim_win_get_config(cur_win).relative ~= "" then
 			vim.api.nvim_win_close(cur_win, true)
 		end
@@ -187,7 +129,11 @@ function M.open_merge_conflict_resolver(file_path)
 	local target_bufnr = vim.fn.bufadd(file_path)
 	vim.fn.bufload(target_bufnr)
 
-	vim.bo[target_bufnr].modifiable = true
+	-- Create a separate temporary scratch buffer for the float UI
+	local float_bufnr = vim.api.nvim_create_buf(false, true)
+	local file_lines = vim.api.nvim_buf_get_lines(target_bufnr, 0, -1, false)
+	vim.api.nvim_buf_set_lines(float_bufnr, 0, -1, false, file_lines)
+	vim.bo[float_bufnr].filetype = vim.bo[target_bufnr].filetype
 
 	local ui = get_safe_ui()
 	local width = math.max(10, ui.width - 6)
@@ -195,7 +141,7 @@ function M.open_merge_conflict_resolver(file_path)
 	local col = math.floor((ui.width - width) / 2)
 	local row = math.floor((ui.height - height) / 2)
 
-	local winnr = vim.api.nvim_open_win(target_bufnr, true, {
+	local winnr = vim.api.nvim_open_win(float_bufnr, true, {
 		relative = "editor",
 		width = width,
 		height = height,
@@ -208,20 +154,10 @@ function M.open_merge_conflict_resolver(file_path)
 		zindex = 700,
 	})
 
-	M.setup_keymaps(target_bufnr, winnr)
-	M.highlight_conflicts(target_bufnr)
+	M.setup_keymaps(float_bufnr, target_bufnr, winnr)
+	M.highlight_conflicts(float_bufnr)
 
-	-- Auto-teardown keymaps whenever floating window is closed
-	vim.api.nvim_create_autocmd("WinClosed", {
-		pattern = tostring(winnr),
-		once = true,
-		callback = function()
-			M.teardown_keymaps(target_bufnr)
-		end,
-	})
-
-	local lines = vim.api.nvim_buf_get_lines(target_bufnr, 0, -1, false)
-	for i, line in ipairs(lines) do
+	for i, line in ipairs(file_lines) do
 		if line:match("^<<<<<<<") then
 			safe_set_cursor(winnr, i, 0)
 			break
@@ -229,93 +165,97 @@ function M.open_merge_conflict_resolver(file_path)
 	end
 end
 
-function M.teardown_keymaps(bufnr)
-	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	if not vim.b[bufnr].gitcompanion_conflicts_mapped then
-		return
-	end
+function M.setup_keymaps(float_bufnr, target_bufnr, winnr)
+	local opts = { buffer = float_bufnr, silent = true, noremap = true, nowait = true }
 
-	for _, key in ipairs(KEYS_TO_CONTROL) do
-		pcall(vim.keymap.del, "n", key, { buffer = bufnr })
-	end
-
-	vim.b[bufnr].gitcompanion_conflicts_mapped = nil
-	vim.b[bufnr].gitcompanion_active_win = nil
-end
-
-function M.setup_keymaps(bufnr, winnr)
-	bufnr = bufnr or vim.api.nvim_get_current_buf()
-	local opts = { buffer = bufnr, silent = true, noremap = true, nowait = true }
-
-	vim.b[bufnr].gitcompanion_active_win = winnr
-
-	for _, key in ipairs(KEYS_TO_CONTROL) do
+	local keys_to_disable = {
+		"i",
+		"I",
+		"a",
+		"A",
+		"o",
+		"O",
+		"r",
+		"R",
+		"c",
+		"C",
+		"s",
+		"S",
+		"d",
+		"x",
+		"X",
+		"p",
+		"P",
+		"u",
+		"<C-r>",
+		"v",
+		"V",
+		"<C-v>",
+		"w",
+		"e",
+		"ge",
+		"0",
+		"$",
+		"^",
+		"G",
+		"gg",
+		"<CR>",
+		"H",
+		"L",
+	}
+	for _, key in ipairs(keys_to_disable) do
 		vim.keymap.set("n", key, "<Nop>", opts)
 	end
 
-	local function get_target_win()
-		local active_win = vim.b[bufnr].gitcompanion_active_win
-		if active_win and vim.api.nvim_win_is_valid(active_win) then
-			return active_win
-		end
-		local wins = vim.fn.win_findbuf(bufnr)
-		return #wins > 0 and wins[1] or vim.api.nvim_get_current_win()
-	end
-
 	vim.keymap.set("n", "<Space>", function()
-		M.resolve_conflict_at_cursor(bufnr, "auto")
-		M.highlight_conflicts(bufnr)
+		M.resolve_conflict_at_cursor(float_bufnr, target_bufnr, "auto")
+		M.highlight_conflicts(float_bufnr)
 	end, opts)
 
 	vim.keymap.set("n", "b", function()
-		M.resolve_conflict_at_cursor(bufnr, "both")
-		M.highlight_conflicts(bufnr)
+		M.resolve_conflict_at_cursor(float_bufnr, target_bufnr, "both")
+		M.highlight_conflicts(float_bufnr)
 	end, opts)
 
 	vim.keymap.set("n", "q", function()
-		local win = get_target_win()
-		if vim.api.nvim_win_get_config(win).relative ~= "" then
-			vim.api.nvim_win_close(win, true)
+		if vim.api.nvim_win_is_valid(winnr) then
+			vim.api.nvim_win_close(winnr, true)
 		end
 	end, opts)
 
 	vim.keymap.set("n", "j", function()
-		local win = get_target_win()
-		local cur_line = vim.api.nvim_win_get_cursor(win)[1]
-		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+		local cur_line = vim.api.nvim_win_get_cursor(winnr)[1]
+		local lines = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
 
 		if cur_line < #lines then
-			safe_set_cursor(win, cur_line + 1, 0)
+			safe_set_cursor(winnr, cur_line + 1, 0)
 		else
 			for i = 1, #lines do
 				if lines[i]:match("^<<<<<<<") then
-					safe_set_cursor(win, i, 0)
+					safe_set_cursor(winnr, i, 0)
 					break
 				end
 			end
 		end
-		M.highlight_conflicts(bufnr)
+		M.highlight_conflicts(float_bufnr)
 	end, opts)
 
 	vim.keymap.set("n", "k", function()
-		local win = get_target_win()
-		local cur_line = vim.api.nvim_win_get_cursor(win)[1]
-		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+		local cur_line = vim.api.nvim_win_get_cursor(winnr)[1]
+		local lines = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
 
 		if cur_line > 1 then
-			safe_set_cursor(win, cur_line - 1, 0)
+			safe_set_cursor(winnr, cur_line - 1, 0)
 		else
 			for i = #lines, 1, -1 do
 				if lines[i]:match("^<<<<<<<") then
-					safe_set_cursor(win, i, 0)
+					safe_set_cursor(winnr, i, 0)
 					break
 				end
 			end
 		end
-		M.highlight_conflicts(bufnr)
+		M.highlight_conflicts(float_bufnr)
 	end, opts)
-
-	vim.b[bufnr].gitcompanion_conflicts_mapped = true
 end
 
 function M.highlight_conflicts(bufnr)
