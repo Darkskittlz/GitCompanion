@@ -12,7 +12,7 @@ local ns_id
 local refresh_ui
 
 -- TODO: Create Merge Conflict Resolver
--- TODO: Fix merging files or dropping files not showing in GitCompanion
+-- TODO: Fix merging files or dropping files not refreshing to show most up to date file info.
 
 -- Highlights
 vim.api.nvim_set_hl(0, "GitBranchCurrent", { fg = "#549afc" })
