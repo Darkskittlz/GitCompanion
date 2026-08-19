@@ -1222,13 +1222,9 @@ local function toggle_mode(dir)
 	Ui.selected_index = 1
 
 	if Ui.mode == "files" then
-		get_changed_files() -- Make sure tree root and visible tree lines are updated
+		get_changed_files()
 	elseif Ui.mode == "stashes" then
 		load_stashes()
-	end
-
-	if type(update_window_layout) == "function" then
-		update_window_layout()
 	end
 
 	refresh_ui()
@@ -1594,6 +1590,15 @@ local function delete_branch()
 	refresh_ui()
 end
 
+M.close = function()
+	for _, win_key in ipairs({ "diff_win", "left_win", "right_win", "help_win" }) do
+		if Ui and Ui[win_key] and vim.api.nvim_win_is_valid(Ui[win_key]) then
+			pcall(vim.api.nvim_win_close, Ui[win_key], true)
+			Ui[win_key] = nil
+		end
+	end
+end
+
 -- Open UI
 function M.toggle(opts)
 	-- 1. If windows are already open, close them (Toggle Off)
@@ -1620,23 +1625,6 @@ function M.toggle(opts)
 
 	Ui.selected_index = 1
 
-	if type(refresh_ui) == "function" then
-		refresh_ui()
-	end
-
-	if type(update_window_layout) == "function" then
-		update_window_layout()
-	end
-
-	vim.notify(
-		string.format(
-			"[DEBUG Toggle Init] Mode: %s | Changed files: %d",
-			tostring(Ui.mode),
-			Ui.changed_files and #Ui.changed_files or 0
-		),
-		vim.log.levels.INFO
-	)
-
 	-- 2. Ensure Buffers Exist and are Valid
 	if not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
 		Ui.diff_buf = vim.api.nvim_create_buf(false, true)
@@ -1656,6 +1644,15 @@ function M.toggle(opts)
 		vim.bo[buf].bufhidden = "hide" -- Keep buffers alive across toggles
 		vim.bo[buf].modifiable = true
 	end
+
+	vim.notify(
+		string.format(
+			"[DEBUG Toggle Init] Mode: %s | Changed files: %d",
+			tostring(Ui.mode),
+			Ui.changed_files and #Ui.changed_files or 0
+		),
+		vim.log.levels.INFO
+	)
 
 	-- 2. Screen Dimensions & Row Offsets
 	local ui = vim.api.nvim_list_uis()[1]
@@ -1801,9 +1798,15 @@ function M.toggle(opts)
 	local pad_len = math.max(0, w - left_width - right_width)
 	local pad = string.rep(" ", pad_len)
 
+	vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.help_buf })
 	vim.api.nvim_buf_set_lines(Ui.help_buf, 0, -1, false, { left_text .. pad .. right_text })
-	vim.api.nvim_buf_set_option(Ui.help_buf, "modifiable", false)
 	vim.api.nvim_buf_add_highlight(Ui.help_buf, -1, "GitMsg", 0, 0, -1)
+	vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.help_buf })
+
+	-- 6. Render UI Contents AFTER layout & windows exist
+	if type(refresh_ui) == "function" then
+		refresh_ui()
+	end
 
 	-- 4. Close Handler
 	local function close_ui()
@@ -1989,10 +1992,6 @@ function M.toggle(opts)
 
 	if type(refresh_ui) == "function" then
 		refresh_ui()
-	end
-
-	if type(update_window_layout) == "function" then
-		update_window_layout()
 	end
 
 	-- Keymaps
