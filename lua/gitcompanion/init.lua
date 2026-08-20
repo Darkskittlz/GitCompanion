@@ -439,6 +439,8 @@ get_changed_files_async = function(cb)
    end)
 end
 
+-- test
+
 local function get_diff_for_target(path)
    if not path or path == "" then
       return { "[No file selected]" }
