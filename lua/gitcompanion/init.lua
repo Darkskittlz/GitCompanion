@@ -3350,6 +3350,9 @@ function M.toggle(opts)
             return
          end
 
+         -- Capture origin window BEFORE opening any temporary dialogs or floating windows
+         local orig_win = vim.api.nvim_get_current_win()
+
          local function wrap_text(text, max_width)
             local lines, current_line = {}, ""
             for word in text:gmatch("%S+") do
@@ -3382,6 +3385,10 @@ function M.toggle(opts)
             return
          end
 
+         -- Quote branches safely for shell execution
+         local safe_target = vim.fn.shellescape(target_branch)
+         local safe_current = vim.fn.shellescape(current_branch)
+
          -- OPTIONS
          local options = {
             {
@@ -3393,7 +3400,7 @@ function M.toggle(opts)
                    .. "' into '"
                    .. current_branch
                    .. "'. Creates a merge commit if needed.",
-               cmd = "git merge " .. target_branch,
+               cmd = "git merge " .. safe_target,
             },
             {
                key = "s",
@@ -3402,7 +3409,7 @@ function M.toggle(opts)
                desc = "Squash commits from '"
                    .. target_branch
                    .. "' into working tree, do not commit automatically.",
-               cmd = "git merge --squash " .. target_branch,
+               cmd = "git merge --squash " .. safe_target,
             },
             {
                key = "S",
@@ -3411,9 +3418,9 @@ function M.toggle(opts)
                desc = "Squash commits from '" .. target_branch .. "' and commit automatically.",
                cmd = string.format(
                   "git merge --squash %s && git commit -m 'Merge %s into %s'",
-                  target_branch,
-                  target_branch,
-                  current_branch
+                  safe_target,
+                  safe_target,
+                  safe_current
                ),
             },
             {
@@ -3426,7 +3433,7 @@ function M.toggle(opts)
          }
 
          local selected = 1
-         local ui = vim.api.nvim_list_uis()[1]
+         local ui = vim.api.nvim_list_uis()[1] or { width = 80, height = 24 }
          local width, height = 52, #options + 3
          local row, col = math.floor((ui.height - height) / 2), math.floor((ui.width - width) / 2)
 
@@ -3493,7 +3500,7 @@ function M.toggle(opts)
             render()
          end, { buffer = buf_win })
 
-         -- Close the merge popup completely (if 'q' or 'Esc' pressed)
+         -- Close popup windows
          local function close_all()
             if vim.api.nvim_win_is_valid(win_desc) then
                vim.api.nvim_win_close(win_desc, true)
@@ -3502,7 +3509,9 @@ function M.toggle(opts)
                vim.api.nvim_win_close(win, true)
             end
             Ui.mode = "branches"
-            refresh_ui()
+            if type(refresh_ui) == "function" then
+               refresh_ui()
+            end
          end
 
          local function apply_selected()
@@ -3512,18 +3521,16 @@ function M.toggle(opts)
                return
             end
 
-            close_all() -- close main popup first
+            close_all()
 
-            -- 1. Ensure tables are explicitly instantiated outside callbacks
             local stdout_lines = {}
             local stderr_lines = {}
 
-            -- run merge asynchronously
             vim.fn.jobstart(opt.cmd, {
                stdout_buffered = true,
                stderr_buffered = true,
                on_stdout = function(_, data)
-                  if data and #data > 0 then
+                  if data then
                      for _, line in ipairs(data) do
                         if line ~= "" then
                            table.insert(stdout_lines, line)
@@ -3532,7 +3539,7 @@ function M.toggle(opts)
                   end
                end,
                on_stderr = function(_, data)
-                  if data and #data > 0 then
+                  if data then
                      for _, line in ipairs(data) do
                         if line ~= "" then
                            table.insert(stderr_lines, line)
@@ -3542,7 +3549,6 @@ function M.toggle(opts)
                end,
                on_exit = function(_, exit_code)
                   vim.schedule(function()
-                     -- Safe fallback concatenation
                      local stdout_str = table.concat(stdout_lines or {}, "\n")
                      local stderr_str = table.concat(stderr_lines or {}, "\n")
                      local full_output = stdout_str .. "\n" .. stderr_str
@@ -3550,10 +3556,9 @@ function M.toggle(opts)
                      local has_conflict = exit_code ~= 0 and string.find(full_output, "CONFLICT")
 
                      if has_conflict then
-                        -- Trigger conflict resolution UI directly
-                        conflicts.handle_merge_result(full_output, exit_code)
+                        -- Pass orig_win along to retain window focus state
+                        conflicts.handle_merge_result(full_output, exit_code, orig_win)
                      else
-                        -- Only show output/error floats if there are NO conflicts
                         if type(show_floating_pair) == "function" then
                            show_floating_pair(stdout_lines, stderr_lines)
                         end
