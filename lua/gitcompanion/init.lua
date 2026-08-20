@@ -2449,37 +2449,32 @@ function M.toggle(opts)
 
 	-- 6. Populate Data & Render Contents
 	if type(get_changed_files_async) == "function" then
-		get_changed_files_async()
+		get_changed_files_async(function(files)
+			-- Dynamically set initial mode once async git diff finishes
+			if files and #files > 0 then
+				Ui.mode = "files"
+			else
+				Ui.mode = Ui.mode or "branches"
+			end
+			Ui.selected_index = 1
+
+			if type(update_window_layout) == "function" then
+				update_window_layout()
+			end
+			if type(refresh_ui) == "function" then
+				refresh_ui()
+			end
+		end)
 	end
+
 	if type(load_branches_async) == "function" then
 		load_branches_async()
 	end
 
 	-- vim.notify(
-	-- 	string.format(
-	-- 		"[DEBUG Sec 6 Pre-Check] Ui.mode: %s | changed_files count: %d",
-	-- 		tostring(Ui.mode),
-	-- 		Ui.changed_files and #Ui.changed_files or 0
-	-- 	),
-	-- 	vim.log.levels.WARN
-	-- )
-
-	-- Dynamically pick default mode based on freshly populated changed files
-	if Ui.changed_files and #Ui.changed_files > 0 then
-		Ui.mode = "files"
-	else
-		Ui.mode = "branches"
-	end
-	Ui.selected_index = 1
-
-	-- vim.notify(
 	-- 	string.format("[DEBUG Sec 6 Post-Check] Ui.mode evaluated to: %s", tostring(Ui.mode)),
 	-- 	vim.log.levels.WARN
 	-- )
-
-	if type(refresh_ui) == "function" then
-		refresh_ui()
-	end
 
 	-- Keymaps
 	local function set_keymaps(buf)
