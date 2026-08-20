@@ -1245,15 +1245,33 @@ render_diff = function()
       end
 
       local item = Ui.visible_tree_lines and Ui.visible_tree_lines[Ui.selected_index]
-      local node = item and item.node
 
-      if node then
+      -- Auto-target the first file leaf if the cursor is resting on a folder node
+      if item and (item.is_dir or (item.node and item.node.is_dir)) then
+         for idx, line in ipairs(Ui.visible_tree_lines or {}) do
+            local is_folder = line.is_dir or (line.node and line.node.is_dir)
+            if not is_folder then
+               item = line
+               Ui.selected_index = idx
+               if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
+                  pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { idx, 0 })
+               end
+               break
+            end
+         end
+      end
+
+      local node = item and (item.node or item)
+
+      if node and node.path then
          cache_key = node.path
          if Ui.diff_cache[cache_key] then
             out = Ui.diff_cache[cache_key]
          else
             out = { "[Loading diff...]" }
-            fetch_diff_async(cache_key, node.is_dir)
+            if type(fetch_diff_async) == "function" then
+               fetch_diff_async(cache_key, node.is_dir)
+            end
          end
       else
          out = { "[No file selected]" }
@@ -1271,7 +1289,9 @@ render_diff = function()
                out = Ui.diff_cache[cache_key]
             else
                out = { "[Loading stash diff...]" }
-               fetch_stash_diff_async(cache_key)
+               if type(fetch_stash_diff_async) == "function" then
+                  fetch_stash_diff_async(cache_key)
+               end
             end
          end
       else
@@ -1289,7 +1309,9 @@ render_diff = function()
                out = Ui.diff_cache[cache_key]
             else
                out = { "[Loading commit diff...]" }
-               fetch_commit_diff_async(cache_key)
+               if type(fetch_commit_diff_async) == "function" then
+                  fetch_commit_diff_async(cache_key)
+               end
             end
          else
             out = { "[No commit selected]" }
