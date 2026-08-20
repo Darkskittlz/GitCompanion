@@ -2879,7 +2879,7 @@ function M.toggle(opts)
          end
 
          refresh_ui()
-      end, { buffer = Ui.right_buf, noremap = true, silent = true })
+      end, { buffer = buf, noremap = true, silent = true })
 
       -- Rename commits (in commit float/log) or Rename branches (in branches mode)
       vim.keymap.set("n", "r", function()
