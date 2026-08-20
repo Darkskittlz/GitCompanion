@@ -120,13 +120,20 @@ function M.prompt_proceed_with_merge(cur_win, target_path, orig_win)
 		debug_log("Executing finish_merge()")
 		close()
 
+		-- 1. Stage the resolved file
+		local abs_path = vim.fn.fnamemodify(target_path, ":p")
+		vim.fn.system({ "git", "add", abs_path })
+
+		-- 2. Finalize the merge commit using git commit --no-edit
+		-- (or 'git merge --continue')
+		local commit_out = vim.fn.system({ "git", "commit", "--no-edit" })
+		debug_log("Commit output: " .. commit_out)
+
 		if cur_win and vim.api.nvim_win_is_valid(cur_win) then
-			debug_log("Closing resolver floating window handle: " .. tostring(cur_win))
 			vim.api.nvim_win_close(cur_win, true)
 		end
 
 		if orig_win and vim.api.nvim_win_is_valid(orig_win) then
-			debug_log("Restoring focus to original window handle: " .. tostring(orig_win))
 			vim.api.nvim_set_current_win(orig_win)
 		end
 
@@ -140,10 +147,7 @@ function M.prompt_proceed_with_merge(cur_win, target_path, orig_win)
 			refresh_fn()
 		end
 
-		vim.notify(
-			"Merge conflict resolution finalized for " .. vim.fn.fnamemodify(target_path, ":t"),
-			vim.log.levels.INFO
-		)
+		vim.notify("Merge finalized and committed for " .. vim.fn.fnamemodify(target_path, ":t"), vim.log.levels.INFO)
 	end
 
 	vim.keymap.set("n", "y", finish_merge, { buffer = buf, silent = true, nowait = true })
