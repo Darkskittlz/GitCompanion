@@ -7,7 +7,6 @@ local render_diff
 local toggle_tree_node
 local render_files_tree
 local flatten_tree
-local get_changed_files_async
 local ns_id
 local refresh_ui
 local render_left, render_right, render_diff
@@ -111,7 +110,6 @@ end
 -- 🔄 Load list of Git branches
 ---------------------------------------------------------------------------
 local function load_branches_async(cb)
-   -- Parallel background requests using vim.system
    local branches_raw, current_raw, tracking_raw, status_raw
    local pending = 4
 
@@ -121,7 +119,6 @@ local function load_branches_async(cb)
          return
       end
 
-      -- All process streams completed; proceed with parsing on main thread
       vim.schedule(function()
          local branches = vim.split(branches_raw or "", "\n", { trimempty = true })
          local cleaned = {}
@@ -192,6 +189,10 @@ local function load_branches_async(cb)
          Ui.branches = cleaned
          Ui.branch_statuses = branch_statuses
          Ui.branch_selected = Ui.branch_selected or Ui.branches[1]
+
+         if Ui.commit_graph_cache and Ui.branch_selected then
+            Ui.commit_graph_cache[Ui.branch_selected] = nil
+         end
 
          if cb then
             cb()
@@ -404,7 +405,7 @@ end
 ---------------------------------------------------------------------------
 -- 🧩 Load list of changed files (staged + unstaged)
 ---------------------------------------------------------------------------
-get_changed_files_async = function(cb)
+local function get_changed_files_async(cb)
    vim.system({ "git", "status", "--porcelain" }, { text = true }, function(obj)
       vim.schedule(function()
          local status_lines = vim.split(obj.stdout or "", "\n", { trimempty = true })
@@ -1632,20 +1633,23 @@ end
 
 -- When initializing your UI
 local function init_ui()
-   -- 1. Fetch changed files asynchronously first
-   -- Add this right after fetching changed files on initial startup:
-   get_changed_files_async(function(files)
-      Ui.changed_files = files or {}
-
-      -- If there are uncommitted changes on load, default to files mode
-      if #Ui.changed_files > 0 then
+   get_changed_files_async(function()
+      -- 1. Check updated global state
+      if Ui.changed_files and #Ui.changed_files > 0 then
          Ui.mode = "files"
       else
          Ui.mode = "branches"
       end
+      Ui.selected_index = 1
 
+      -- 2. Ensure split windows adjust to new mode
+      if type(update_window_layout) == "function" then
+         update_window_layout()
+      end
+
+      -- 3. Load commit history and render
       load_branches_async(function()
-         refresh_ui()
+         refresh_ui({ skip_fetch = true })
       end)
    end)
 end
@@ -1777,12 +1781,18 @@ local function toggle_mode(dir)
    Ui.selected_index = 1
 
    if Ui.mode == "files" then
-      get_changed_files_async()
+      get_changed_files_async(function()
+         refresh_ui({ skip_fetch = true })
+      end)
    elseif Ui.mode == "stashes" then
-      load_stashes()
+      if type(load_stashes) == "function" then
+         load_stashes()
+      end
+      refresh_ui()
+   else
+      refresh_ui()
    end
 
-   refresh_ui()
    focus_left()
 end
 
