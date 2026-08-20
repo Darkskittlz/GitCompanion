@@ -210,36 +210,46 @@ local function format_node_text(node, indent_level)
    end
 end
 
+local root_name = vim.fn.fnamemodify(vim.fn.getcwd(), ":t") .. "/"
+
+Ui.tree_root = {
+   name = root_name,
+   is_dir = true,
+   expanded = true,
+   children = {},
+}
+
 -- 2. Flatten tree into line entries based on expansion states
 flatten_tree = function(node, depth, result)
    depth = depth or 0
    result = result or {}
 
-   local keys = {}
-   for k in pairs(node.children or {}) do
-      table.insert(keys, k)
-   end
-   table.sort(keys, function(a, b)
-      local ca, cb = node.children[a], node.children[b]
-      if ca.is_dir ~= cb.is_dir then
-         return ca.is_dir
+   -- Include the directory/root node itself in the visible lines
+   table.insert(result, {
+      text = format_node_text(node, depth),
+      node = node,
+   })
+
+   -- Only process children if it's an expanded directory
+   if node.is_dir and node.expanded then
+      local keys = {}
+      for k in pairs(node.children or {}) do
+         table.insert(keys, k)
       end
-      return ca.name < cb.name
-   end)
+      table.sort(keys, function(a, b)
+         local ca, cb = node.children[a], node.children[b]
+         if ca.is_dir ~= cb.is_dir then
+            return ca.is_dir
+         end
+         return ca.name < cb.name
+      end)
 
-   for _, k in ipairs(keys) do
-      local child = node.children[k]
-
-      -- CALL format_node_text HERE
-      table.insert(result, {
-         text = format_node_text(child, depth),
-         node = child,
-      })
-
-      if child.is_dir and child.expanded then
+      for _, k in ipairs(keys) do
+         local child = node.children[k]
          flatten_tree(child, depth + 1, result)
       end
    end
+
    return result
 end
 
@@ -1216,105 +1226,61 @@ local function toggle_mode(dir)
    focus_left()
 end
 
--- Helper to gather all leaf file paths under a node recursively
-local function get_all_child_paths(node)
-   local paths = {}
+-- Helper to gather all leaf nodes under a directory/root recursively
+local function collect_child_files(node, files)
+   files = files or {}
    if not node then
-      return paths
+      return files
    end
 
    if not node.is_dir then
-      if node.path then
-         table.insert(paths, node.path)
-      end
-      return paths
-   end
-
-   for _, child in pairs(node.children or {}) do
-      if child.is_dir then
-         local sub_paths = get_all_child_paths(child)
-         for _, p in ipairs(sub_paths) do
-            table.insert(paths, p)
-         end
-      else
-         if child.path then
-            table.insert(paths, child.path)
-         end
+      table.insert(files, node)
+   else
+      for _, child in pairs(node.children or {}) do
+         collect_child_files(child, files)
       end
    end
-   return paths
+   return files
 end
 
--- Staging/Unstaging Function with Debugging
-local function stage_unstage_selected()
-   if Ui.mode ~= "files" or not Ui.left_win or not vim.api.nvim_win_is_valid(Ui.left_win) then
-      return
-   end
-
-   local cursor = vim.api.nvim_win_get_cursor(Ui.left_win)
-   Ui.selected_index = cursor[1]
-
+stage_unstage_selected = function()
    local item = Ui.visible_tree_lines and Ui.visible_tree_lines[Ui.selected_index]
    local node = item and item.node
    if not node then
       return
    end
 
-   local target_paths = node.is_dir and get_all_child_paths(node) or { node.path or node.value or node.name }
-   if #target_paths == 0 then
-      return
-   end
+   if node.is_dir then
+      local leaf_nodes = collect_child_files(node)
 
-   -- Check current staged status
-   local status_lines = vim.fn.systemlist("git status --porcelain")
-   local staged_set = {}
-   for _, line in ipairs(status_lines) do
-      if #line >= 4 then
-         local staged_char = line:sub(1, 1)
-         local path = line:sub(4):gsub("^%s+", ""):gsub('^"', ""):gsub('"$', "")
-         if staged_char ~= " " and staged_char ~= "?" then
-            staged_set[path] = true
+      -- If any file under the directory is unstaged, stage everything. Otherwise, unstage all.
+      local should_stage = false
+      for _, child in ipairs(leaf_nodes) do
+         if not child.staged then
+            should_stage = true
+            break
          end
       end
-   end
 
-   local all_staged = true
-   for _, path in ipairs(target_paths) do
-      if not staged_set[path] then
-         all_staged = false
-         break
+      for _, child in ipairs(leaf_nodes) do
+         child.staged = should_stage
+         if should_stage then
+            vim.fn.system({ "git", "add", child.path })
+         else
+            vim.fn.system({ "git", "restore", "--staged", child.path })
+         end
+      end
+   else
+      -- Single file handler
+      node.staged = not node.staged
+      if node.staged then
+         vim.fn.system({ "git", "add", node.path })
+      else
+         vim.fn.system({ "git", "restore", "--staged", node.path })
       end
    end
 
-   -- Execute git action
-   local action = all_staged and "restore --staged -- " or "add -- "
-   local cmd = "git " .. action
-   for _, path in ipairs(target_paths) do
-      cmd = cmd .. " " .. vim.fn.shellescape(path)
-   end
-
-   vim.fn.system(cmd)
-
-   -- 1. Refresh changed files list
-   get_changed_files(Ui.branch_selected)
-
-   -- 2. Re-flatten tree from newly updated tree_root
-   if Ui.tree_root then
-      Ui.visible_tree_lines = flatten_tree(Ui.tree_root)
-   end
-
-   -- 3. Render tree buffer
-   render_files_tree()
-
-   -- 4. Preserve cursor
-   local max_line = #(Ui.visible_tree_lines or {})
-   local safe_idx = math.min(math.max(1, Ui.selected_index), max_line)
-   if safe_idx > 0 then
-      pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { safe_idx, 0 })
-   end
-
-   -- 5. Refresh diff pane
-   render_diff()
+   refresh_ui()
 end
 
 -- Discard changes for the selected file

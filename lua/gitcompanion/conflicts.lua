@@ -14,7 +14,7 @@ M.session_state = {
 local function debug_log(msg, level)
 	if M.debug then
 		level = level or vim.log.levels.INFO
-		vim.notify("[GitCompanion Debug] " .. msg, level)
+		-- vim.notify("[GitCompanion Debug] " .. msg, level)
 	end
 end
 
@@ -147,7 +147,7 @@ function M.prompt_proceed_with_merge(cur_win, target_path, orig_win)
 			refresh_fn()
 		end
 
-		vim.notify("Merge finalized and committed for " .. vim.fn.fnamemodify(target_path, ":t"), vim.log.levels.INFO)
+		-- vim.notify("Merge finalized and committed for " .. vim.fn.fnamemodify(target_path, ":t"), vim.log.levels.INFO)
 	end
 
 	vim.keymap.set("n", "y", finish_merge, { buffer = buf, silent = true, nowait = true })
