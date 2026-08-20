@@ -90,7 +90,7 @@ function M.prompt_proceed_with_merge(cur_win, target_path, orig_win)
 
 	local ui = get_safe_ui()
 	local w, h = 54, 6
-	local row = math.floor((ui.height - h) / 2)
+	local row = math.max(0, math.floor((ui.height - h) / 2) - 1)
 	local col = math.floor((ui.width - w) / 2)
 
 	local win = vim.api.nvim_open_win(buf, true, {
@@ -304,7 +304,8 @@ function M.open_merge_conflict_resolver(file_path, orig_win)
 	local width = math.max(10, ui.width - 6)
 	local height = math.max(10, ui.height - 4)
 	local col = math.floor((ui.width - width) / 2)
-	local row = math.floor((ui.height - height) / 2)
+	-- Shift float position up by 1 row
+	local row = math.max(0, math.floor((ui.height - height) / 2) - 1)
 
 	local winnr = vim.api.nvim_open_win(float_bufnr, true, {
 		relative = "editor",
@@ -392,64 +393,20 @@ function M.setup_keymaps(float_bufnr, target_path, winnr, orig_win)
 		end
 	end, opts)
 
-	-- Jump down to the next conflict block
+	-- Move down line-by-line with wraparound
 	vim.keymap.set("n", "j", function()
 		local cur_line = vim.api.nvim_win_get_cursor(winnr)[1]
-		local lines = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
-		local target_line = nil
-
-		-- Search downward for the next start marker
-		for i = cur_line + 1, #lines do
-			if lines[i]:match("^<<<<<<<") then
-				target_line = i
-				break
-			end
-		end
-
-		-- Wrap around to the top if no marker is found below
-		if not target_line then
-			for i = 1, cur_line do
-				if lines[i]:match("^<<<<<<<") then
-					target_line = i
-					break
-				end
-			end
-		end
-
-		if target_line then
-			safe_set_cursor(winnr, target_line, 0)
-			M.highlight_conflicts(float_bufnr)
-		end
+		local line_count = vim.api.nvim_buf_line_count(float_bufnr)
+		local target = (cur_line >= line_count) and 1 or (cur_line + 1)
+		safe_set_cursor(winnr, target, 0)
 	end, opts)
 
-	-- Jump up to the previous conflict block
+	-- Move up line-by-line with wraparound
 	vim.keymap.set("n", "k", function()
 		local cur_line = vim.api.nvim_win_get_cursor(winnr)[1]
-		local lines = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
-		local target_line = nil
-
-		-- Search upward for the previous start marker
-		for i = cur_line - 1, 1, -1 do
-			if lines[i]:match("^<<<<<<<") then
-				target_line = i
-				break
-			end
-		end
-
-		-- Wrap around to the bottom if no marker is found above
-		if not target_line then
-			for i = #lines, cur_line, -1 do
-				if lines[i]:match("^<<<<<<<") then
-					target_line = i
-					break
-				end
-			end
-		end
-
-		if target_line then
-			safe_set_cursor(winnr, target_line, 0)
-			M.highlight_conflicts(float_bufnr)
-		end
+		local line_count = vim.api.nvim_buf_line_count(float_bufnr)
+		local target = (cur_line <= 1) and line_count or (cur_line - 1)
+		safe_set_cursor(winnr, target, 0)
 	end, opts)
 end
 
@@ -518,7 +475,7 @@ function M.prompt_resolve_conflicts(filename, on_choice)
 
 	local ui = get_safe_ui()
 	local w, h = 50, 6
-	local row = math.floor((ui.height - h) / 2)
+	local row = math.max(0, math.floor((ui.height - h) / 2) - 1)
 	local col = math.floor((ui.width - w) / 2)
 
 	local win = vim.api.nvim_open_win(buf, true, {
@@ -566,12 +523,10 @@ function M.handle_merge_result(cmd_output, exit_code, orig_win)
 	debug_log(string.format("handle_merge_result: exit_code=%d, orig_win=%s", exit_code, tostring(orig_win)))
 
 	if exit_code ~= 0 and string.find(clean_output, "CONFLICT") then
-		-- Explicitly extract file path following "Merge conflict in "
 		local conflicted_file = clean_output:match("Merge%s+conflict%s+in%s+([%w_%.%-%/]+)")
 			or clean_output:match("CONFLICT%s*%(.-%):%s*Merge%s+conflict%s+in%s+([%w_%.%-%/]+)")
 			or clean_output:match("CONFLICT.-in%s+([%w_%.%-%/]+)")
 
-		-- Filter out git symbols if erroneously matched
 		if conflicted_file == "HEAD" then
 			conflicted_file = nil
 			for line in clean_output:gmatch("[^\r\n]+") do
