@@ -114,10 +114,20 @@ function M.prompt_proceed_with_merge(cur_win, target_path, orig_win)
 		if cur_win and vim.api.nvim_win_is_valid(cur_win) then
 			vim.api.nvim_win_close(cur_win, true)
 		end
-		-- Restore focus to branches view window if valid
+
+		-- Restore window focus & reset UI mode back to branches
 		if orig_win and vim.api.nvim_win_is_valid(orig_win) then
 			vim.api.nvim_set_current_win(orig_win)
 		end
+
+		-- Explicitly switch global UI mode back to branches and trigger refresh
+		if Ui then
+			Ui.mode = "branches"
+		end
+		if type(refresh_ui) == "function" then
+			refresh_ui()
+		end
+
 		vim.notify(
 			"Merge conflict resolution finalized for " .. vim.fn.fnamemodify(target_path, ":t"),
 			vim.log.levels.INFO
@@ -374,12 +384,13 @@ function M.setup_keymaps(float_bufnr, target_path, winnr, orig_win)
 		end
 	end, opts)
 
-	-- Jump to next conflict section or block using 'j'
+	-- Jump to next conflict section or marker using 'j'
 	vim.keymap.set("n", "j", function()
 		local cur_line = vim.api.nvim_win_get_cursor(winnr)[1]
 		local lines = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
 
 		local target = nil
+		-- Search forward for any marker
 		for i = cur_line + 1, #lines do
 			if lines[i]:match("^<<<<<<<") or lines[i]:match("^=======") or lines[i]:match("^>>>>>>>") then
 				target = i
@@ -387,8 +398,9 @@ function M.setup_keymaps(float_bufnr, target_path, winnr, orig_win)
 			end
 		end
 
+		-- Wrap around to first conflict marker if at bottom
 		if not target then
-			for i = 1, cur_line do
+			for i = 1, #lines do
 				if lines[i]:match("^<<<<<<<") then
 					target = i
 					break
@@ -402,12 +414,13 @@ function M.setup_keymaps(float_bufnr, target_path, winnr, orig_win)
 		M.highlight_conflicts(float_bufnr)
 	end, opts)
 
-	-- Jump to previous conflict section or block using 'k'
+	-- Jump to previous conflict section or marker using 'k'
 	vim.keymap.set("n", "k", function()
 		local cur_line = vim.api.nvim_win_get_cursor(winnr)[1]
 		local lines = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
 
 		local target = nil
+		-- Search backward for any marker
 		for i = cur_line - 1, 1, -1 do
 			if lines[i]:match("^<<<<<<<") or lines[i]:match("^=======") or lines[i]:match("^>>>>>>>") then
 				target = i
@@ -415,8 +428,9 @@ function M.setup_keymaps(float_bufnr, target_path, winnr, orig_win)
 			end
 		end
 
+		-- Wrap around to bottom conflict marker if at top
 		if not target then
-			for i = #lines, cur_line, -1 do
+			for i = #lines, 1, -1 do
 				if lines[i]:match("^>>>>>>>") then
 					target = i
 					break
