@@ -2847,14 +2847,24 @@ function M.toggle(opts)
          refresh_ui()
       end, { buffer = buf, noremap = true, silent = true })
 
-      -- Rename commits (in commit float/log) or Rename branches (in branches mode)
+      -- Renames the commit under the cursor in the commit log (amends HEAD or rebases historical commits with topology preservation), or renames the selected branch in branches view-
       vim.keymap.set("n", "r", function()
          local win = vim.api.nvim_get_current_win()
+         vim.notify(
+            string.format(
+               "[Debug] Key 'r' pressed in Win ID: %s (Right Win: %s, Left Win: %s)",
+               win,
+               Ui.right_win,
+               Ui.left_win
+            ),
+            vim.log.levels.DEBUG
+         )
 
          -- 1. Rename Commit when inside the Right Window (Commit Log)
          if win == Ui.right_win then
             local cursor = vim.api.nvim_win_get_cursor(Ui.right_win)
             local line = vim.api.nvim_buf_get_lines(Ui.right_buf, cursor[1] - 1, cursor[1], false)[1] or ""
+            vim.notify(string.format("[Debug] Cursor Line [%d]: '%s'", cursor[1], line), vim.log.levels.DEBUG)
 
             -- Extract 7+ hex digit commit hash even if graph characters (*, |, \) precede it
             local hash = line:match("%f[%w](%x%x%x%x%x%x%x+)%f[%W]") or line:match("(%x%x%x%x%x%x%x+)")
@@ -2870,19 +2880,41 @@ function M.toggle(opts)
             local is_head = (full_hash == head_hash)
 
             local current_msg = vim.fn.system("git log -1 --format=%s " .. hash):gsub("%s+$", "")
+            vim.notify(
+               string.format(
+                  "[Debug] Parsed Hash: %s | Full: %s | HEAD: %s | Is HEAD: %s",
+                  hash,
+                  full_hash:sub(1, 7),
+                  head_hash:sub(1, 7),
+                  tostring(is_head)
+               ),
+               vim.log.levels.DEBUG
+            )
 
             vim.ui.input({
                prompt = "Rename commit (" .. hash:sub(1, 7) .. "): ",
                default = current_msg,
             }, function(new_msg)
                if not new_msg or new_msg == "" or new_msg == current_msg then
+                  vim.notify("[Debug] Input cancelled or unmodified.", vim.log.levels.DEBUG)
                   return
                end
 
                if is_head then
                   -- Simple amend for HEAD commit
                   local cmd = "git commit --amend -m " .. vim.fn.shellescape(new_msg)
+                  vim.notify("[Debug] Executing HEAD amend: " .. cmd, vim.log.levels.DEBUG)
+
                   local out = vim.fn.system(cmd)
+                  vim.notify(
+                     string.format(
+                        "[Debug] HEAD Amend exit code: %d | Output: %s",
+                        vim.v.shell_error,
+                        out:gsub("\n", " ")
+                     ),
+                     vim.log.levels.DEBUG
+                  )
+
                   if vim.v.shell_error == 0 then
                      show_centered_message("Renamed HEAD commit", "✏️")
                      refresh_ui()
@@ -2890,44 +2922,75 @@ function M.toggle(opts)
                      vim.notify("Failed to rename HEAD commit: " .. out, vim.log.levels.ERROR)
                   end
                else
-                  -- Non-HEAD reword using git rebase exec
+                  -- Non-HEAD reword with topology preservation & automatic cleanup
                   local stashed = false
                   local status = vim.fn.system("git status --porcelain"):gsub("%s+$", "")
                   if #status > 0 then
+                     vim.notify("[Debug] Working tree dirty. Stashing changes...", vim.log.levels.DEBUG)
                      vim.fn.system("git stash push -m 'temp_reword_stash'")
                      stashed = true
                   end
 
-                  local exec_cmd = string.format(
-                     'git rebase -i %s~1 --exec "git commit --amend -m %s"',
-                     hash,
-                     vim.fn.shellescape(new_msg)
-                  )
+                  -- 1. Write the new message to a clean, temporary Lua file to avoid bash quote escaping
+                  local tmp_msg_file = vim.fn.tempname()
+                  local f = io.open(tmp_msg_file, "w")
+                  if f then
+                     f:write(new_msg .. "\n")
+                     f:close()
+                  else
+                     vim.notify("Git: Failed to create temp file for commit message.", vim.log.levels.ERROR)
+                     return
+                  end
 
-                  -- Non-interactive rebase sequence editor trick
-                  local sequence_cmd = string.format(
-                     "GIT_SEQUENCE_EDITOR=\"sed -i '' 's/^pick %s/reword %s/'\" git rebase -i %s~1",
+                  -- 2. Use `cp` as the editor. Git executes: cp '/tmp/file' '.git/COMMIT_EDITMSG'
+                  local git_cmd = string.format(
+                     "GIT_SEQUENCE_EDITOR=\"sed -i '' 's/^pick %s/reword %s/' 2>/dev/null || sed -i 's/^pick %s/reword %s/'\" "
+                     .. "GIT_EDITOR=\"cp '%s'\" "
+                     .. "git rebase -i -r %s~1",
                      hash:sub(1, 7),
                      hash:sub(1, 7),
+                     hash:sub(1, 7),
+                     hash:sub(1, 7),
+                     tmp_msg_file,
                      hash
                   )
 
-                  local out = vim.fn.system(sequence_cmd)
+                  vim.notify("[Debug] Executing rebase cmd: " .. git_cmd, vim.log.levels.DEBUG)
+                  local out = vim.fn.system(git_cmd)
+                  vim.notify(
+                     string.format(
+                        "[Debug] Rebase exit code: %d | Output: %s",
+                        vim.v.shell_error,
+                        out:gsub("\n", " ")
+                     ),
+                     vim.log.levels.DEBUG
+                  )
 
                   if vim.v.shell_error ~= 0 then
-                     -- Fallback to exec execution if sequence editor fails
-                     out = vim.fn.system(exec_cmd)
+                     vim.notify(
+                        "[Debug] Rebase error detected. Aborting rebase sequence...",
+                        vim.log.levels.WARN
+                     )
+                     local abort_out = vim.fn.system("git rebase --abort")
+                     vim.notify("[Debug] Abort result: " .. abort_out:gsub("\n", " "), vim.log.levels.DEBUG)
                   end
 
                   if stashed then
+                     vim.notify("[Debug] Popping stashed changes...", vim.log.levels.DEBUG)
                      vim.fn.system("git stash pop")
                   end
+
+                  -- Cleanup temp file
+                  os.remove(tmp_msg_file)
 
                   if vim.v.shell_error == 0 then
                      show_centered_message("Renamed commit " .. hash:sub(1, 7), "✏️")
                      refresh_ui()
                   else
-                     vim.notify("Failed to reword commit: " .. out, vim.log.levels.ERROR)
+                     vim.notify(
+                        "Failed to reword commit (conflict or merge boundary): " .. out,
+                        vim.log.levels.ERROR
+                     )
                   end
                end
             end)
@@ -2938,18 +3001,37 @@ function M.toggle(opts)
             if not branch or branch == "" then
                branch = Ui.branch_selected or "HEAD"
             end
+            vim.notify(
+               string.format(
+                  "[Debug] Branch Mode | Selected Index: %s | Target Branch: %s",
+                  tostring(Ui.selected_index),
+                  branch
+               ),
+               vim.log.levels.DEBUG
+            )
 
             vim.ui.input({
                prompt = "Rename branch '" .. branch .. "'",
                default = branch,
             }, function(new_branch)
                if not new_branch or new_branch == "" or new_branch == branch then
+                  vim.notify("[Debug] Branch rename cancelled or unchanged.", vim.log.levels.DEBUG)
                   return
                end
 
                local cmd =
                    string.format("git branch -m %s %s", vim.fn.shellescape(branch), vim.fn.shellescape(new_branch))
+               vim.notify("[Debug] Executing branch rename: " .. cmd, vim.log.levels.DEBUG)
+
                local out = vim.fn.system(cmd)
+               vim.notify(
+                  string.format(
+                     "[Debug] Branch rename exit code: %d | Output: %s",
+                     vim.v.shell_error,
+                     out:gsub("\n", " ")
+                  ),
+                  vim.log.levels.DEBUG
+               )
 
                if vim.v.shell_error == 0 then
                   if Ui.branch_selected == branch then
@@ -2962,6 +3044,11 @@ function M.toggle(opts)
                   vim.notify("Failed to rename branch: " .. out, vim.log.levels.ERROR)
                end
             end)
+         else
+            vim.notify(
+               string.format("[Debug] Key 'r' ignored. Active Win: %s, Mode: %s", win, tostring(Ui.mode)),
+               vim.log.levels.WARN
+            )
          end
       end, { buffer = buf, noremap = true, silent = true, desc = "Rename commit or branch" })
 
