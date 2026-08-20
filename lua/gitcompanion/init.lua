@@ -1,4 +1,7 @@
 ---@diagnostic disable: undefined-global
+---
+local conflicts = require("gitcompanion.conflicts")
+
 local M = {}
 local render_diff
 local toggle_tree_node
@@ -6,6 +9,7 @@ local render_files_tree
 local flatten_tree
 local get_changed_files
 local ns_id
+local refresh_ui
 
 -- Highlights
 vim.api.nvim_set_hl(0, "GitBranchCurrent", { fg = "#549afc" })
@@ -36,6 +40,10 @@ vim.api.nvim_set_hl(0, "GitAuthor", { fg = "#00a77d", italic = true })
 vim.api.nvim_set_hl(0, "GitOutput", { fg = "#40a02b", bold = false, italic = false }) -- Light green for stdout (success)
 vim.api.nvim_set_hl(0, "GitError", { fg = "#FF6F69", bold = false, italic = false })  -- Red for stderr (error)
 vim.api.nvim_set_hl(0, "GitMsg", { fg = "#777777", bold = false, italic = false })
+
+vim.api.nvim_set_hl(0, "GitCompanionOurs", { bg = "#2e3f33", default = true })
+vim.api.nvim_set_hl(0, "GitCompanionTheirs", { bg = "#23374d", default = true })
+vim.api.nvim_set_hl(0, "GitCompanionMarker", { bg = "#444444", bold = true, default = true })
 
 -- Dark Mode Colors
 -- vim.api.nvim_set_hl(0, "GitHash", { fg = "#11518c", bold = true, italic = false })
@@ -353,10 +361,18 @@ end
 get_changed_files = function(branch)
    local status_lines = vim.fn.systemlist("git status --porcelain")
    local files = {}
+   Ui.has_conflicts = false
 
    for _, line in ipairs(status_lines) do
+      local code = line:sub(1, 2)
       local parsed = parse_file_status(line)
       if parsed then
+         -- Check if git marks file as unmerged
+         if code:match("U") or code == "AA" or code == "DD" then
+            parsed.is_conflict = true
+            Ui.has_conflicts = true
+         end
+
          table.insert(files, {
             path = parsed.path,
             old_path = parsed.old_path,
@@ -364,12 +380,16 @@ get_changed_files = function(branch)
             staged = parsed.staged,
             status = parsed.status,
             display = parsed.display,
+            is_conflict = parsed.is_conflict,
          })
       end
    end
 
+   Ui.changed_files = files
    Ui.tree_root = build_tree_from_files(files)
    Ui.visible_tree_lines = flatten_tree(Ui.tree_root)
+
+   return files
 end
 
 local function get_diff_for_target(path)
@@ -795,7 +815,15 @@ end
 ---------------------------------------------------------------------------
 -- Refresh UI on close
 ---------------------------------------------------------------------------
-local function refresh_ui()
+refresh_ui = function()
+   -- 0. Re-fetch git state and rebuild file tree from disk
+   if type(get_changed_files) == "function" then
+      get_changed_files()
+   end
+   if type(load_branches) == "function" and Ui.mode == "branches" then
+      load_branches()
+   end
+
    -- 1. Sync window visibility & dimensions with current Ui.mode
    if type(update_window_layout) == "function" then
       update_window_layout()
@@ -808,15 +836,15 @@ local function refresh_ui()
       Ui.branch_selected = Ui.branches[Ui.selected_index]
    end
 
+   -- Clamp selected index BEFORE rendering so bounds are accurate
+   local total = (Ui.mode == "branches") and #Ui.branches
+       or (Ui.mode == "stashes" and #Ui.stashes or #Ui.changed_files)
+   Ui.selected_index = math.max(1, math.min(Ui.selected_index or 1, math.max(1, total)))
+
    -- Render the panes
    render_left()
    render_right()
    render_diff()
-
-   -- Handle edge cases for bounds
-   local total = (Ui.mode == "branches") and #Ui.branches
-       or (Ui.mode == "stashes" and #Ui.stashes or #Ui.changed_files)
-   Ui.selected_index = math.max(1, math.min(Ui.selected_index, total))
 
    -- Update left window title and cursor
    if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
@@ -894,6 +922,12 @@ end, { buffer = buf_err, nowait = true, silent = true })
 
 -- Show output and error windows in floating style
 local function show_floating_pair(stdout_lines, stderr_lines)
+   -- Check if either output stream contains a merge conflict
+   local full_text = table.concat(stdout_lines or {}, "\n") .. "\n" .. table.concat(stderr_lines or {}, "\n")
+   if string.find(full_text, "CONFLICT") then
+      return -- Skip rendering Git Output/Errors windows completely
+   end
+
    save_active_window()
 
    local ui = vim.api.nvim_list_uis()[1]
@@ -1023,12 +1057,6 @@ end
 local function focus_left()
    if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
       vim.api.nvim_set_current_win(Ui.left_win)
-   end
-end
-
-local function focus_right()
-   if Ui.right_win and vim.api.nvim_win_is_valid(Ui.right_win) then
-      vim.api.nvim_set_current_win(Ui.right_win)
    end
 end
 
@@ -1179,13 +1207,9 @@ local function toggle_mode(dir)
    Ui.selected_index = 1
 
    if Ui.mode == "files" then
-      get_changed_files() -- Make sure tree root and visible tree lines are updated
+      get_changed_files()
    elseif Ui.mode == "stashes" then
       load_stashes()
-   end
-
-   if type(update_window_layout) == "function" then
-      update_window_layout()
    end
 
    refresh_ui()
@@ -1507,16 +1531,20 @@ local function checkout_branch()
 
    -- Update internal state
    Ui.branch_selected = branch
-   show_centered_message("Switched to branch: " .. branch, "✅")
 
-   -- Reload branch list (this automatically sorts the new current branch to the top)
-   load_branches()
+   -- Reload branch list (sorts active branch to top)
+   if type(load_branches) == "function" then
+      load_branches()
+   end
 
-   -- Reset selection to the top since the checked-out branch is now at index 1
+   -- Reset selection index to top active branch
    Ui.selected_index = 1
 
-   -- Redraw all panes
+   -- 1. Refresh UI first while main window retains focus
    refresh_ui()
+
+   -- 2. Display completion message on top of refreshed UI
+   show_centered_message("Switched to branch: " .. branch, "✅")
 end
 
 -- Delete the selected branch
@@ -1551,6 +1579,15 @@ local function delete_branch()
    refresh_ui()
 end
 
+M.close = function()
+   for _, win_key in ipairs({ "diff_win", "left_win", "right_win", "help_win" }) do
+      if Ui and Ui[win_key] and vim.api.nvim_win_is_valid(Ui[win_key]) then
+         pcall(vim.api.nvim_win_close, Ui[win_key], true)
+         Ui[win_key] = nil
+      end
+   end
+end
+
 -- Open UI
 function M.toggle(opts)
    -- 1. If windows are already open, close them (Toggle Off)
@@ -1568,17 +1605,14 @@ function M.toggle(opts)
       load_branches()
    end
 
-   Ui.mode = Ui.mode or "files"
-   Ui.selected_index = 1
+   -- Set default mode based on changed files count
+   if Ui.changed_files and #Ui.changed_files > 0 then
+      Ui.mode = "files"
+   else
+      Ui.mode = "branches"
+   end
 
-   -- vim.notify(
-   --    string.format(
-   --       "[DEBUG Toggle Init] Mode: %s | Changed files: %d",
-   --       tostring(Ui.mode),
-   --       Ui.changed_files and #Ui.changed_files or 0
-   --    ),
-   --    vim.log.levels.INFO
-   -- )
+   Ui.selected_index = 1
 
    -- 2. Ensure Buffers Exist and are Valid
    if not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
@@ -1599,6 +1633,15 @@ function M.toggle(opts)
       vim.bo[buf].bufhidden = "hide" -- Keep buffers alive across toggles
       vim.bo[buf].modifiable = true
    end
+
+   vim.notify(
+      string.format(
+         "[DEBUG Toggle Init] Mode: %s | Changed files: %d",
+         tostring(Ui.mode),
+         Ui.changed_files and #Ui.changed_files or 0
+      ),
+      vim.log.levels.INFO
+   )
 
    -- 2. Screen Dimensions & Row Offsets
    local ui = vim.api.nvim_list_uis()[1]
@@ -1664,17 +1707,17 @@ function M.toggle(opts)
    })
 
    if Ui.mode == "branches" then
-      -- vim.notify(
-      --    string.format(
-      --       "[DEBUG Creating Right Win] Mode: %s | right_buf Valid: %s | log_row: %d | log_h: %d",
-      --       tostring(Ui.mode),
-      --       tostring(Ui.right_buf and vim.api.nvim_buf_is_valid(Ui.right_buf)),
-      --       log_row,
-      --       log_h
-      --    ),
-      --    vim.log.levels.WARN
-      -- )
-      --comment
+      vim.notify(
+         string.format(
+            "[DEBUG Creating Right Win] Mode: %s | right_buf Valid: %s | log_row: %d | log_h: %d",
+            tostring(Ui.mode),
+            tostring(Ui.right_buf and vim.api.nvim_buf_is_valid(Ui.right_buf)),
+            log_row,
+            log_h
+         ),
+         vim.log.levels.WARN
+      )
+
       Ui.right_win = vim.api.nvim_open_win(Ui.right_buf, false, {
          relative = "editor",
          width = w,
@@ -1744,9 +1787,15 @@ function M.toggle(opts)
    local pad_len = math.max(0, w - left_width - right_width)
    local pad = string.rep(" ", pad_len)
 
+   vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.help_buf })
    vim.api.nvim_buf_set_lines(Ui.help_buf, 0, -1, false, { left_text .. pad .. right_text })
-   vim.api.nvim_buf_set_option(Ui.help_buf, "modifiable", false)
    vim.api.nvim_buf_add_highlight(Ui.help_buf, -1, "GitMsg", 0, 0, -1)
+   vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.help_buf })
+
+   -- 6. Render UI Contents AFTER layout & windows exist
+   if type(refresh_ui) == "function" then
+      refresh_ui()
+   end
 
    -- 4. Close Handler
    local function close_ui()
@@ -1800,16 +1849,16 @@ function M.toggle(opts)
    local group = vim.api.nvim_create_augroup("GitPickerAutoCmds", { clear = true })
 
    local function show_help()
-      local buf = vim.api.nvim_create_buf(false, true) -- <--- ADD THIS LINE
+      local buf = vim.api.nvim_create_buf(false, true)
       local lines = {
          " Navigation",
          "  j / k       : Move selection up / down",
-         "  sj/sk       : Jump up / down between panels",
+         "  sj / sk     : Jump up / down between panels",
          "  H / L       : Cycle views (Branches ↔ Files ↔ Stashes)",
          "",
          " Actions",
          "  <Space>     : Checkout Branch / Stage File / Pop Stash",
-         "  d           : Delete Branch / Discard Changes / Drop Stash / Drop Commit",
+         "  d           : Delete Branch / Discard Changes / Drop Stash / Revert Commit",
          "  r           : Rename Branch (Branches) / Reword Commit (Commit Log)",
          "  y           : Copy Branch name (Branches) / Copy Commit metadata (Commit Log)",
          "  c           : Commit (Files) / Checkout Remote (Branches)",
@@ -1819,17 +1868,23 @@ function M.toggle(opts)
          "  p / P       : Pull / Push branch (Branches)",
          "  s           : Create new stash (Any view)",
          "",
+         " Merge Conflict Resolver",
+         "  <Space>     : Resolve conflict under cursor (keeps current section)",
+         "  b           : Keep both ours & theirs conflict sections",
+         "  j / k       : Jump to next / previous conflict marker",
+         "  q           : Exit resolver window",
+         "",
          " General",
          "  ?           : Show this help modal",
          "  q / <Esc>   : Close picker or popup",
       }
 
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-      vim.api.nvim_buf_set_option(buf, "modifiable", false)
+      vim.bo[buf].modifiable = false
 
       local ui = vim.api.nvim_list_uis()[1]
-      local width = 75
-      local height = #lines
+      local width = 81
+      local height = #lines + 2
       local row = math.floor((ui.height - height) / 2)
       local col = math.floor((ui.width - width) / 2)
 
@@ -1908,14 +1963,14 @@ function M.toggle(opts)
       load_branches()
    end
 
-   -- vim.notify(
-   --    string.format(
-   --       "[DEBUG Sec 6 Pre-Check] Ui.mode: %s | changed_files count: %d",
-   --       tostring(Ui.mode),
-   --       Ui.changed_files and #Ui.changed_files or 0
-   --    ),
-   --    vim.log.levels.WARN
-   -- )
+   vim.notify(
+      string.format(
+         "[DEBUG Sec 6 Pre-Check] Ui.mode: %s | changed_files count: %d",
+         tostring(Ui.mode),
+         Ui.changed_files and #Ui.changed_files or 0
+      ),
+      vim.log.levels.WARN
+   )
 
    -- Dynamically pick default mode based on freshly populated changed files
    if Ui.changed_files and #Ui.changed_files > 0 then
@@ -1925,17 +1980,13 @@ function M.toggle(opts)
    end
    Ui.selected_index = 1
 
-   -- vim.notify(
-   --    string.format("[DEBUG Sec 6 Post-Check] Ui.mode evaluated to: %s", tostring(Ui.mode)),
-   --    vim.log.levels.WARN
-   -- )
+   vim.notify(
+      string.format("[DEBUG Sec 6 Post-Check] Ui.mode evaluated to: %s", tostring(Ui.mode)),
+      vim.log.levels.WARN
+   )
 
    if type(refresh_ui) == "function" then
       refresh_ui()
-   end
-
-   if type(update_window_layout) == "function" then
-      update_window_layout()
    end
 
    -- Keymaps
@@ -1977,45 +2028,6 @@ function M.toggle(opts)
          end)
       end, { buffer = buf, noremap = true, silent = true, desc = "Create new stash" })
 
-      local function has_worktree_changes()
-         -- returns >0 when there are changes
-         return vim.fn.system("git status --porcelain") ~= ""
-      end
-
-      local function make_show_error(row, height, ui)
-         return function(msg)
-            local buf_err = vim.api.nvim_create_buf(false, true)
-            vim.api.nvim_set_hl(0, "ResetError", {
-               fg = "#ff4444",
-               bg = "NONE",
-               bold = true,
-            })
-            vim.api.nvim_buf_set_lines(buf_err, 0, -1, false, { msg })
-            vim.api.nvim_buf_add_highlight(buf_err, -1, "ResetError", 0, 0, -1)
-
-            local w = #msg + 4
-            local error_row = row + height
-            local error_col = math.floor((ui.width - w) / 2)
-
-            local win_err = vim.api.nvim_open_win(buf_err, false, {
-               relative = "editor",
-               width = w,
-               height = 1,
-               row = error_row - 10,
-               col = error_col,
-               style = "minimal",
-               border = "rounded",
-               zindex = 600,
-            })
-
-            vim.defer_fn(function()
-               if vim.api.nvim_win_is_valid(win_err) then
-                  vim.api.nvim_win_close(win_err, true)
-               end
-            end, 1800)
-         end
-      end
-
       -- G keymap for reset/rebase options on commits
       vim.keymap.set("n", "g", function()
          if Ui.mode ~= "branches" then
@@ -2029,7 +2041,9 @@ function M.toggle(opts)
 
          local cursor = vim.api.nvim_win_get_cursor(Ui.right_win)
          local line = vim.api.nvim_buf_get_lines(Ui.right_buf, cursor[1] - 1, cursor[1], false)[1] or ""
-         local hash = line:match("^(%S+)")
+
+         -- Extract hex commit hash anywhere on line (handles bullet points, tree characters, icons)
+         local hash = line:match("(%x%x%x%x%x%x%x+)")
          if not hash then
             return
          end
@@ -2068,7 +2082,6 @@ function M.toggle(opts)
                desc = "Reset HEAD to this commit, keeping changes unstaged.",
                cmd = "git reset --mixed " .. hash,
             },
-
             {
                key = "s",
                label = "Soft reset",
@@ -2076,7 +2089,6 @@ function M.toggle(opts)
                desc = "Reset HEAD to this commit, keeping all changes staged.",
                cmd = "git reset --soft " .. hash,
             },
-
             {
                key = "h",
                label = "Hard reset",
@@ -2084,7 +2096,6 @@ function M.toggle(opts)
                desc = "Fully reset working tree & index to this commit.",
                cmd = "git reset --hard " .. hash,
             },
-
             {
                key = "c",
                label = "Cancel",
@@ -2101,7 +2112,7 @@ function M.toggle(opts)
          ---------------------------------------------------------------------------
          local ui = vim.api.nvim_list_uis()[1]
          local width = 52
-         local height = #options + 2 -- FIX: removed the extra blank line
+         local height = #options + 2
 
          local row = math.floor((ui.height - height) / 2)
          local col = math.floor((ui.width - width) / 2)
@@ -2141,7 +2152,7 @@ function M.toggle(opts)
             local lines = {}
 
             for i, opt in ipairs(options) do
-               local prefix = (i == selected) and " " or "  "
+               local prefix = (i == selected) and " " or "  "
                lines[#lines + 1] = prefix .. opt.label
             end
 
@@ -2197,16 +2208,15 @@ function M.toggle(opts)
                return
             end
 
-            if has_worktree_changes() then
-               local show_error = make_show_error(row, height, ui)
-               show_error("Cannot reset: work tree has uncommitted changes")
-               return
+            -- Execute git command directly without worktree check blockage
+            local out = vim.fn.system(opt.cmd)
+
+            if vim.v.shell_error ~= 0 then
+               vim.notify("Git error: " .. out, vim.log.levels.ERROR)
+            else
+               local msg = opt.label .. " → " .. hash
+               vim.notify(msg, vim.log.levels.INFO)
             end
-
-            vim.fn.system(opt.cmd)
-
-            local msg = opt.label .. " → " .. hash
-            vim.notify(msg, vim.log.levels.INFO)
 
             close_all()
          end
@@ -2231,12 +2241,6 @@ function M.toggle(opts)
                end, { buffer = buf, noremap = true, silent = true })
             end
          end
-
-         ---------------------------------------------------------------------------
-         -- EXIT
-         ---------------------------------------------------------------------------
-         vim.keymap.set("n", "q", close_all, { buffer = buf })
-         vim.keymap.set("n", "<Esc>", close_all, { buffer = buf })
       end, { buffer = Ui.right_buf, noremap = true, silent = true })
 
       -- keymap for dropping commits
@@ -2285,7 +2289,7 @@ function M.toggle(opts)
                end
             end
          end
-      end, { noremap = true, silent = true })
+      end, { buffer = buf, noremap = true, silent = true })
 
       -- Apply Action (<Space>)
       vim.keymap.set("n", "<Space>", function()
@@ -2573,7 +2577,7 @@ function M.toggle(opts)
          vim.api.nvim_buf_set_option(buf_diff, "bufhidden", "wipe")
          vim.api.nvim_buf_set_option(buf_diff, "filetype", "diff")
 
-         local diff_cmd = "git diff --cached " .. vim.fn.shellescape(branch)
+         local diff_cmd = "git diff --cached"
          local diff_lines = vim.fn.systemlist(diff_cmd)
          if vim.v.shell_error ~= 0 or #diff_lines == 0 then
             diff_lines = { "[No staged changes]" }
@@ -2670,7 +2674,6 @@ function M.toggle(opts)
             local title = vim.api.nvim_buf_get_lines(buf_title, 0, -1, false)[1] or ""
             local body = table.concat(vim.api.nvim_buf_get_lines(buf_desc, 0, -1, false), "\n")
 
-            vim.fn.system("git add -A")
             local cmd = "git commit -m " .. vim.fn.shellescape(title)
 
             if body:match("%S") then
@@ -2756,16 +2759,21 @@ function M.toggle(opts)
                stderr_lines = data or {}
             end,
             on_exit = function(_, exit_code)
-               -- Show floating windows with the output and error messages
-               show_floating_pair(stdout_lines or {}, stderr_lines or {})
+               vim.schedule(function()
+                  local stdout_str = table.concat(stdout_lines or {}, "\n")
+                  local stderr_str = table.concat(stderr_lines or {}, "\n")
+                  local full_output = stdout_str .. "\n" .. stderr_str
 
-               -- After pulling, handle success or failure
-               if exit_code == 0 then
-                  show_centered_message("✅ Pulled latest changes for branch: " .. branch, vim.log.levels.INFO)
-               else
-                  show_centered_message("❌ Failed to pull for branch: " .. branch, vim.log.levels.ERROR)
-               end
-               refresh_ui()
+                  local has_conflict = exit_code ~= 0 and string.find(full_output, "CONFLICT")
+
+                  if has_conflict then
+                     -- 1. Route strictly to conflict prompt
+                     conflicts.handle_merge_result(full_output, exit_code)
+                  else
+                     -- 2. Route strictly to standard output floats
+                     show_floating_pair(stdout_lines, stderr_lines)
+                  end
+               end)
             end,
          })
 
@@ -2871,7 +2879,7 @@ function M.toggle(opts)
          end
 
          refresh_ui()
-      end)
+      end, { buffer = buf, noremap = true, silent = true })
 
       -- Rename commits (in commit float/log) or Rename branches (in branches mode)
       vim.keymap.set("n", "r", function()
@@ -3015,7 +3023,7 @@ function M.toggle(opts)
                end
             end)
          end
-      end, { noremap = true, silent = true, desc = "Rename commit or branch" })
+      end, { buffer = buf, noremap = true, silent = true, desc = "Rename commit or branch" })
 
       -- Yank branch (in branch view) or commit details (in commit view)
       vim.keymap.set("n", "y", function()
@@ -3456,7 +3464,6 @@ function M.toggle(opts)
          vim.api.nvim_win_set_option(win_desc, "cursorline", false)
          vim.api.nvim_win_set_cursor(win_desc, { 1, 0 })
 
-         -- test
          -- RENDER FUNCTION
          local function render()
             local lines = {}
@@ -3498,8 +3505,6 @@ function M.toggle(opts)
             refresh_ui()
          end
 
-         -- test
-
          local function apply_selected()
             local opt = options[selected]
             if not opt.cmd then
@@ -3509,30 +3514,59 @@ function M.toggle(opts)
 
             close_all() -- close main popup first
 
-            local stdout_lines = nil
-            local stderr_lines = nil
+            -- 1. Ensure tables are explicitly instantiated outside callbacks
+            local stdout_lines = {}
+            local stderr_lines = {}
 
             -- run merge asynchronously
             vim.fn.jobstart(opt.cmd, {
                stdout_buffered = true,
                stderr_buffered = true,
                on_stdout = function(_, data)
-                  stdout_lines = data or {}
+                  if data and #data > 0 then
+                     for _, line in ipairs(data) do
+                        if line ~= "" then
+                           table.insert(stdout_lines, line)
+                        end
+                     end
+                  end
                end,
                on_stderr = function(_, data)
-                  stderr_lines = data or {}
+                  if data and #data > 0 then
+                     for _, line in ipairs(data) do
+                        if line ~= "" then
+                           table.insert(stderr_lines, line)
+                        end
+                     end
+                  end
                end,
-               on_exit = function()
-                  -- Use the floating window function here
-                  show_floating_pair(stdout_lines or {}, stderr_lines or {})
+               on_exit = function(_, exit_code)
+                  vim.schedule(function()
+                     -- Safe fallback concatenation
+                     local stdout_str = table.concat(stdout_lines or {}, "\n")
+                     local stderr_str = table.concat(stderr_lines or {}, "\n")
+                     local full_output = stdout_str .. "\n" .. stderr_str
+
+                     local has_conflict = exit_code ~= 0 and string.find(full_output, "CONFLICT")
+
+                     if has_conflict then
+                        -- Trigger conflict resolution UI directly
+                        conflicts.handle_merge_result(full_output, exit_code)
+                     else
+                        -- Only show output/error floats if there are NO conflicts
+                        if type(show_floating_pair) == "function" then
+                           show_floating_pair(stdout_lines, stderr_lines)
+                        end
+                     end
+                  end)
                end,
             })
          end
 
          vim.keymap.set("n", "<CR>", apply_selected, { buffer = buf_win })
-         for _, opt in ipairs(options) do
+         for idx, opt in ipairs(options) do
             vim.keymap.set("n", opt.key, function()
-               selected = _
+               selected = idx
                apply_selected()
             end, { buffer = buf_win })
          end
