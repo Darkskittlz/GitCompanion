@@ -54,7 +54,7 @@ local function count_conflict_blocks(lines)
 end
 
 --------------------------------------------------------------------------------
--- UI EXTENSIONS (COUNTER & CONFIRMATION PROMPT)
+-- UI EXTENSIONS
 --------------------------------------------------------------------------------
 
 function M.update_top_right_counter(bufnr)
@@ -123,37 +123,21 @@ function M.prompt_proceed_with_merge(cur_win, target_path, orig_win)
 		if cur_win and vim.api.nvim_win_is_valid(cur_win) then
 			debug_log("Closing resolver floating window handle: " .. tostring(cur_win))
 			vim.api.nvim_win_close(cur_win, true)
-		else
-			debug_log("cur_win was invalid or already closed", vim.log.levels.WARN)
 		end
 
-		-- Restore window focus
 		if orig_win and vim.api.nvim_win_is_valid(orig_win) then
 			debug_log("Restoring focus to original window handle: " .. tostring(orig_win))
 			vim.api.nvim_set_current_win(orig_win)
-		else
-			debug_log("orig_win invalid or lost: " .. tostring(orig_win), vim.log.levels.WARN)
 		end
 
-		-- Debug global UI state resolution
 		local ui_obj = _G.Ui or _G.GitCompanionUi or Ui
-		debug_log("Resolved UI Object: " .. tostring(ui_obj))
-
 		if ui_obj then
 			ui_obj.mode = "branches"
-			debug_log("Successfully updated UI mode to 'branches'")
-		else
-			debug_log("Global UI instance missing! Check module visibility.", vim.log.levels.ERROR)
 		end
 
 		local refresh_fn = _G.refresh_ui or (ui_obj and ui_obj.refresh) or refresh_ui
-		debug_log("Resolved refresh_ui function: " .. tostring(refresh_fn))
-
 		if type(refresh_fn) == "function" then
 			refresh_fn()
-			debug_log("Triggered UI refresh function successfully")
-		else
-			debug_log("Failed to execute refresh_ui: Function not accessible globally", vim.log.levels.ERROR)
 		end
 
 		vim.notify(
@@ -164,16 +148,8 @@ function M.prompt_proceed_with_merge(cur_win, target_path, orig_win)
 
 	vim.keymap.set("n", "y", finish_merge, { buffer = buf, silent = true, nowait = true })
 	vim.keymap.set("n", "<CR>", finish_merge, { buffer = buf, silent = true, nowait = true })
-
-	vim.keymap.set("n", "n", function()
-		debug_log("User declined finalizing merge prompt")
-		close()
-	end, { buffer = buf, silent = true, nowait = true })
-
-	vim.keymap.set("n", "<Esc>", function()
-		debug_log("User cancelled merge prompt via Esc")
-		close()
-	end, { buffer = buf, silent = true, nowait = true })
+	vim.keymap.set("n", "n", close, { buffer = buf, silent = true, nowait = true })
+	vim.keymap.set("n", "<Esc>", close, { buffer = buf, silent = true, nowait = true })
 end
 
 --------------------------------------------------------------------------------
@@ -201,6 +177,7 @@ function M.sync_to_target_file(float_bufnr, target_path)
 		vim.bo[target_bufnr].modifiable = true
 		vim.api.nvim_buf_set_lines(target_bufnr, 0, -1, false, lines)
 		vim.bo[target_bufnr].modified = false
+		vim.cmd("checktime " .. target_bufnr)
 	end
 end
 
@@ -240,10 +217,8 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_path, mode, orig_win)
 		return
 	end
 
-	local selected_side = ""
 	local keep_lines = {}
 	if mode == "both" then
-		selected_side = "BOTH"
 		for i = start_line + 1, end_line - 1 do
 			if i ~= separator_line then
 				table.insert(keep_lines, lines[i])
@@ -251,19 +226,15 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_path, mode, orig_win)
 		end
 	else
 		if cursor_line < separator_line then
-			selected_side = "OURS (top branch)"
 			for i = start_line + 1, separator_line - 1 do
 				table.insert(keep_lines, lines[i])
 			end
 		else
-			selected_side = "THEIRS (bottom branch)"
 			for i = separator_line + 1, end_line - 1 do
 				table.insert(keep_lines, lines[i])
 			end
 		end
 	end
-
-	debug_log(string.format("Resolving block [%d-%d]. Chosen side: %s", start_line, end_line, selected_side))
 
 	vim.api.nvim_buf_set_lines(float_bufnr, start_line - 1, end_line, false, keep_lines)
 	M.sync_to_target_file(float_bufnr, target_path)
@@ -324,10 +295,7 @@ function M.open_merge_conflict_resolver(file_path, orig_win)
 	local ft = nil
 	if vim.filetype.match then
 		ft = vim.filetype.match({ filename = full_path })
-	elseif vim.filetype.detect then
-		ft = vim.filetype.detect({ filename = full_path })
 	end
-
 	if ft then
 		vim.bo[float_bufnr].filetype = ft
 	end
@@ -406,19 +374,16 @@ function M.setup_keymaps(float_bufnr, target_path, winnr, orig_win)
 	end
 
 	vim.keymap.set("n", "<Space>", function()
-		debug_log("Pressed <Space> to resolve conflict")
 		M.resolve_conflict_at_cursor(float_bufnr, target_path, "auto", orig_win)
 		M.highlight_conflicts(float_bufnr)
 	end, opts)
 
 	vim.keymap.set("n", "b", function()
-		debug_log("Pressed 'b' to keep both branches")
 		M.resolve_conflict_at_cursor(float_bufnr, target_path, "both", orig_win)
 		M.highlight_conflicts(float_bufnr)
 	end, opts)
 
 	vim.keymap.set("n", "q", function()
-		debug_log("Pressed 'q' to abort conflict resolution window")
 		if vim.api.nvim_win_is_valid(winnr) then
 			vim.api.nvim_win_close(winnr, true)
 		end
@@ -427,32 +392,18 @@ function M.setup_keymaps(float_bufnr, target_path, winnr, orig_win)
 		end
 	end, opts)
 
-	-- Step line-by-line using 'j' while landing on markers AND content lines
 	vim.keymap.set("n", "j", function()
 		local cur_line = vim.api.nvim_win_get_cursor(winnr)[1]
 		local line_count = vim.api.nvim_buf_line_count(float_bufnr)
-		local target = cur_line + 1
-
-		if target > line_count then
-			target = 1 -- Wrap to top line
-		end
-
-		debug_log(string.format("j pressed: Navigating from line %d -> %d", cur_line, target))
+		local target = (cur_line >= line_count) and 1 or (cur_line + 1)
 		safe_set_cursor(winnr, target, 0)
 		M.highlight_conflicts(float_bufnr)
 	end, opts)
 
-	-- Step line-by-line using 'k' while landing on markers AND content lines
 	vim.keymap.set("n", "k", function()
 		local cur_line = vim.api.nvim_win_get_cursor(winnr)[1]
 		local line_count = vim.api.nvim_buf_line_count(float_bufnr)
-		local target = cur_line - 1
-
-		if target < 1 then
-			target = line_count -- Wrap to bottom line
-		end
-
-		debug_log(string.format("k pressed: Navigating from line %d -> %d", cur_line, target))
+		local target = (cur_line <= 1) and line_count or (cur_line - 1)
 		safe_set_cursor(winnr, target, 0)
 		M.highlight_conflicts(float_bufnr)
 	end, opts)
@@ -550,25 +501,16 @@ function M.prompt_resolve_conflicts(filename, on_choice)
 	end
 
 	vim.keymap.set("n", "y", function()
-		debug_log("User accepted conflict resolution prompt")
 		close()
 		on_choice(true)
 	end, { buffer = buf, silent = true, nowait = true })
 
 	vim.keymap.set("n", "n", function()
-		debug_log("User skipped conflict resolution prompt")
 		close()
 		on_choice(false)
 	end, { buffer = buf, silent = true, nowait = true })
 
 	vim.keymap.set("n", "<Esc>", function()
-		debug_log("User escaped conflict resolution prompt")
-		close()
-		on_choice(false)
-	end, { buffer = buf, silent = true, nowait = true })
-
-	vim.keymap.set("n", "q", function()
-		debug_log("User quit conflict resolution prompt")
 		close()
 		on_choice(false)
 	end, { buffer = buf, silent = true, nowait = true })
@@ -580,10 +522,25 @@ function M.handle_merge_result(cmd_output, exit_code, orig_win)
 	debug_log(string.format("handle_merge_result: exit_code=%d, orig_win=%s", exit_code, tostring(orig_win)))
 
 	if exit_code ~= 0 and string.find(clean_output, "CONFLICT") then
-		local conflicted_file = clean_output:match("CONFLICT.-in%s+([%w_%.%-%/]+)")
+		-- Explicitly extract file path following "Merge conflict in "
+		local conflicted_file = clean_output:match("Merge%s+conflict%s+in%s+([%w_%.%-%/]+)")
+			or clean_output:match("CONFLICT%s*%(.-%):%s*Merge%s+conflict%s+in%s+([%w_%.%-%/]+)")
+			or clean_output:match("CONFLICT.-in%s+([%w_%.%-%/]+)")
 
-		if type(close_floating) == "function" then
-			close_floating()
+		-- Filter out git symbols if erroneously matched
+		if conflicted_file == "HEAD" then
+			conflicted_file = nil
+			for line in clean_output:gmatch("[^\r\n]+") do
+				local file_match = line:match("Merge%s+conflict%s+in%s+([%w_%.%-%/]+)")
+				if file_match and file_match ~= "HEAD" then
+					conflicted_file = file_match
+					break
+				end
+			end
+		end
+
+		if _G.close_floating and type(_G.close_floating) == "function" then
+			_G.close_floating()
 		end
 
 		if conflicted_file then
@@ -594,34 +551,9 @@ function M.handle_merge_result(cmd_output, exit_code, orig_win)
 				end
 			end)
 		else
-			debug_log("Failed to extract filename from conflict output", vim.log.levels.WARN)
+			debug_log("Failed to extract valid filename from conflict output", vim.log.levels.WARN)
 		end
 	end
 end
-
-vim.api.nvim_create_autocmd({ "BufEnter", "BufWinEnter", "BufWritePost" }, {
-	group = vim.api.nvim_create_augroup("GitCompanionConflictHL", { clear = true }),
-	callback = function(args)
-		local bufnr = args.buf
-		if not vim.api.nvim_buf_is_valid(bufnr) or vim.bo[bufnr].buftype == "nofile" then
-			return
-		end
-
-		local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-		local has_conflict = false
-		for _, line in ipairs(lines) do
-			if line:match("^<<<<<<<") then
-				has_conflict = true
-				break
-			end
-		end
-
-		if has_conflict then
-			M.highlight_conflicts(bufnr)
-		else
-			vim.api.nvim_buf_clear_namespace(bufnr, M.conflict_ns, 0, -1)
-		end
-	end,
-})
 
 return M
