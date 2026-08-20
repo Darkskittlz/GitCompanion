@@ -2855,16 +2855,19 @@ function M.toggle(opts)
          if win == Ui.right_win then
             local cursor = vim.api.nvim_win_get_cursor(Ui.right_win)
             local line = vim.api.nvim_buf_get_lines(Ui.right_buf, cursor[1] - 1, cursor[1], false)[1] or ""
-            local hash = line:match("^(%S+)")
+
+            -- Extract 7+ hex digit commit hash even if graph characters (*, |, \) precede it
+            local hash = line:match("%f[%w](%x%x%x%x%x%x%x+)%f[%W]") or line:match("(%x%x%x%x%x%x%x+)")
 
             if not hash then
                vim.notify("Git: No valid commit hash found on current line.", vim.log.levels.WARN)
                return
             end
 
-            -- Check if selected commit is HEAD
-            local head_hash = vim.fn.system("git rev-parse --short HEAD"):gsub("%s+", "")
-            local is_head = hash:find("^" .. head_hash) or head_hash:find("^" .. head_hash)
+            -- Verify full commit hash against HEAD hash accurately
+            local full_hash = vim.fn.system("git rev-parse " .. hash):gsub("%s+", "")
+            local head_hash = vim.fn.system("git rev-parse HEAD"):gsub("%s+", "")
+            local is_head = (full_hash == head_hash)
 
             local current_msg = vim.fn.system("git log -1 --format=%s " .. hash):gsub("%s+$", "")
 
@@ -2877,7 +2880,7 @@ function M.toggle(opts)
                end
 
                if is_head then
-                  -- Simple amend for HEAD
+                  -- Simple amend for HEAD commit
                   local cmd = "git commit --amend -m " .. vim.fn.shellescape(new_msg)
                   local out = vim.fn.system(cmd)
                   if vim.v.shell_error == 0 then
@@ -2887,7 +2890,7 @@ function M.toggle(opts)
                      vim.notify("Failed to rename HEAD commit: " .. out, vim.log.levels.ERROR)
                   end
                else
-                  -- Autostash uncommitted worktree changes before rebasing
+                  -- Non-HEAD reword using git rebase exec
                   local stashed = false
                   local status = vim.fn.system("git status --porcelain"):gsub("%s+$", "")
                   if #status > 0 then
@@ -2895,56 +2898,27 @@ function M.toggle(opts)
                      stashed = true
                   end
 
-                  -- Non-interactive Git rebase with custom sequence editor
-                  local sequence_cmd = string.format(
-                     "GIT_SEQUENCE_EDITOR=\"sed -i '' 's/^pick %s/reword %s/'\" GIT_EDITOR=\"echo %s >\" git rebase -i %s^",
-                     hash,
-                     hash,
-                     vim.fn.shellescape(new_msg),
-                     hash
-                  )
-
-                  -- Fallback using git-filter-repo / parent reset if rebase fails
-                  local rebase_cmd = string.format("git rebase -i --onto %s %s^", hash, hash)
-
-                  -- Execute reword via exec during rebase
                   local exec_cmd = string.format(
-                     'git rebase -i %s^ --exec "git commit --amend -m %s"',
+                     'git rebase -i %s~1 --exec "git commit --amend -m %s"',
                      hash,
                      vim.fn.shellescape(new_msg)
                   )
 
-                  -- Simple head check & reword exec
-                  local out = vim.fn.system(
-                     string.format(
-                        "git filter-branch --msg-filter 'if [ $GIT_COMMIT = %s ]; then echo %s; else cat; fi' %s~1..HEAD",
-                        hash,
-                        vim.fn.shellescape(new_msg),
-                        hash
-                     )
+                  -- Non-interactive rebase sequence editor trick
+                  local sequence_cmd = string.format(
+                     "GIT_SEQUENCE_EDITOR=\"sed -i '' 's/^pick %s/reword %s/'\" git rebase -i %s~1",
+                     hash:sub(1, 7),
+                     hash:sub(1, 7),
+                     hash
                   )
 
-                  -- If filter-branch is blocked/slow, fallback to git commit-tree plumbing safely:
-                  if vim.v.shell_error ~= 0 then
-                     local parent = vim.fn.system("git rev-parse " .. hash .. "^"):gsub("%s+", "")
-                     local tree = vim.fn.system("git rev-parse " .. hash .. "^{tree}"):gsub("%s+", "")
-                     local new_commit = vim.fn
-                         .system(
-                            string.format(
-                               "git commit-tree %s -p %s -m %s",
-                               tree,
-                               parent,
-                               vim.fn.shellescape(new_msg)
-                            )
-                         )
-                         :gsub("%s+", "")
+                  local out = vim.fn.system(sequence_cmd)
 
-                     if #new_commit > 0 then
-                        out = vim.fn.system(string.format("git rebase --onto %s %s HEAD", new_commit, hash))
-                     end
+                  if vim.v.shell_error ~= 0 then
+                     -- Fallback to exec execution if sequence editor fails
+                     out = vim.fn.system(exec_cmd)
                   end
 
-                  -- Restore stashed changes if any were saved
                   if stashed then
                      vim.fn.system("git stash pop")
                   end
