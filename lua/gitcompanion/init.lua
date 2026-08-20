@@ -439,8 +439,6 @@ get_changed_files_async = function(cb)
    end)
 end
 
--- test
-
 local function get_diff_for_target(path)
    if not path or path == "" then
       return { "[No file selected]" }
@@ -1630,22 +1628,24 @@ end
 
 -- When initializing your UI
 local function init_ui()
-   -- Load branches and changed files
-   load_branches_async()
-   get_changed_files_async(Ui.branch_selected)
+   -- 1. Fetch changed files asynchronously first
+   get_changed_files_async(function(files)
+      -- Determine mode based on actual git results
+      if files and #files > 0 then
+         Ui.mode = "files"
+      else
+         Ui.mode = "branches"
+      end
 
-   -- Determine initial mode based on whether there are changes
-   if #Ui.changed_files > 0 then
-      Ui.mode = "files"
-   else
-      Ui.mode = "branches"
-   end
+      Ui.selected_index = 1
 
-   Ui.selected_index = 1
-
-   -- Create buffers / windows here if needed
-   refresh_ui()
-   focus_left()
+      -- 2. Fetch branch/commit history next
+      load_branches_async(function()
+         -- 3. Everything is loaded — now safely draw the UI and focus
+         refresh_ui()
+         focus_left()
+      end)
+   end)
 end
 
 function update_window_layout()
@@ -2293,9 +2293,9 @@ function M.toggle(opts)
    vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.help_buf })
 
    -- 5. Render UI Contents
-   if type(refresh_ui) == "function" then
-      refresh_ui()
-      log_step("refresh_ui() Executed")
+   if type(init_ui) == "function" then
+      init_ui()
+      log_step("init_ui() Executed")
    end
 
    -- 4. Close Handler
