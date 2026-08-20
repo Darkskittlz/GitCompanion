@@ -12,6 +12,10 @@ local ns_id
 local refresh_ui
 local render_left, render_right, render_diff
 
+-- TODO: most recent commits aren't showing in commit log after push
+-- TODO: when there are file changes UI isn't opening up in files changed view
+-- NOTE: These errors happened after fixing bottleneck issues that were causing GitCompanion to open very slowly.
+
 -- Highlights
 vim.api.nvim_set_hl(0, "GitBranchCurrent", { fg = "#549afc" })
 vim.api.nvim_set_hl(0, "GitUnstaged", { fg = "#f99c67", bold = true, italic = true })
