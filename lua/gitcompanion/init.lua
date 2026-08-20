@@ -835,23 +835,18 @@ M.open_commit_or_checkout_popup = function()
       show_centered_message("Committed changes on branch: " .. branch, "🌸")
       close_commit_popup()
 
-      -- 1. Fetch changed files first
-      get_changed_files_async(function(files)
-         Ui.changed_files = files or {}
+      load_branches_async()
+      get_changed_files_async(Ui.branch_selected)
 
-         if #Ui.changed_files == 0 and Ui.mode == "files" then
-            Ui.mode = "branches"
-            Ui.selected_index = 1
-            if type(update_window_layout) == "function" then
-               update_window_layout()
-            end
+      if #Ui.changed_files == 0 and Ui.mode == "files" then
+         Ui.mode = "branches"
+         Ui.selected_index = 1
+         if type(update_window_layout) == "function" then
+            update_window_layout()
          end
+      end
 
-         -- 2. Fetch updated branches/commit log, THEN refresh the UI
-         load_branches_async(function()
-            refresh_ui()
-         end)
-      end)
+      refresh_ui()
    end
 
    for _, b in ipairs({ buf_title, buf_desc, buf_diff }) do
