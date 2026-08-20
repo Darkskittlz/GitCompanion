@@ -1849,16 +1849,16 @@ function M.toggle(opts)
    local group = vim.api.nvim_create_augroup("GitPickerAutoCmds", { clear = true })
 
    local function show_help()
-      local buf = vim.api.nvim_create_buf(false, true) -- <--- ADD THIS LINE
+      local buf = vim.api.nvim_create_buf(false, true)
       local lines = {
          " Navigation",
          "  j / k       : Move selection up / down",
-         "  sj/sk       : Jump up / down between panels",
+         "  sj / sk     : Jump up / down between panels",
          "  H / L       : Cycle views (Branches ↔ Files ↔ Stashes)",
          "",
          " Actions",
          "  <Space>     : Checkout Branch / Stage File / Pop Stash",
-         "  d           : Delete Branch / Discard Changes / Drop Stash / Drop Commit",
+         "  d           : Delete Branch / Discard Changes / Drop Stash / Revert Commit",
          "  r           : Rename Branch (Branches) / Reword Commit (Commit Log)",
          "  y           : Copy Branch name (Branches) / Copy Commit metadata (Commit Log)",
          "  c           : Commit (Files) / Checkout Remote (Branches)",
@@ -1868,17 +1868,23 @@ function M.toggle(opts)
          "  p / P       : Pull / Push branch (Branches)",
          "  s           : Create new stash (Any view)",
          "",
+         " Merge Conflict Resolver",
+         "  <Space>     : Resolve conflict under cursor (keeps current section)",
+         "  b           : Keep both ours & theirs conflict sections",
+         "  j / k       : Jump to next / previous conflict marker",
+         "  q           : Exit resolver window",
+         "",
          " General",
          "  ?           : Show this help modal",
          "  q / <Esc>   : Close picker or popup",
       }
 
       vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-      vim.api.nvim_buf_set_option(buf, "modifiable", false)
+      vim.bo[buf].modifiable = false
 
       local ui = vim.api.nvim_list_uis()[1]
-      local width = 75
-      local height = #lines
+      local width = 81
+      local height = #lines + 2
       local row = math.floor((ui.height - height) / 2)
       local col = math.floor((ui.width - width) / 2)
 
@@ -2283,7 +2289,7 @@ function M.toggle(opts)
                end
             end
          end
-      end, { noremap = true, silent = true })
+      end, { buffer = buf, noremap = true, silent = true })
 
       -- Apply Action (<Space>)
       vim.keymap.set("n", "<Space>", function()
@@ -2873,7 +2879,7 @@ function M.toggle(opts)
          end
 
          refresh_ui()
-      end)
+      end, { buffer = Ui.right_buf, noremap = true, silent = true })
 
       -- Rename commits (in commit float/log) or Rename branches (in branches mode)
       vim.keymap.set("n", "r", function()
@@ -3017,7 +3023,7 @@ function M.toggle(opts)
                end
             end)
          end
-      end, { noremap = true, silent = true, desc = "Rename commit or branch" })
+      end, { buffer = buf, noremap = true, silent = true, desc = "Rename commit or branch" })
 
       -- Yank branch (in branch view) or commit details (in commit view)
       vim.keymap.set("n", "y", function()
