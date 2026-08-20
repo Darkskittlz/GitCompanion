@@ -1629,21 +1629,19 @@ end
 -- When initializing your UI
 local function init_ui()
    -- 1. Fetch changed files asynchronously first
+   -- Add this right after fetching changed files on initial startup:
    get_changed_files_async(function(files)
-      -- Determine mode based on actual git results
-      if files and #files > 0 then
+      Ui.changed_files = files or {}
+
+      -- If there are uncommitted changes on load, default to files mode
+      if #Ui.changed_files > 0 then
          Ui.mode = "files"
       else
          Ui.mode = "branches"
       end
 
-      Ui.selected_index = 1
-
-      -- 2. Fetch branch/commit history next
       load_branches_async(function()
-         -- 3. Everything is loaded — now safely draw the UI and focus
          refresh_ui()
-         focus_left()
       end)
    end)
 end
@@ -3198,10 +3196,7 @@ function M.toggle(opts)
             show_centered_message("Committed changes on branch: " .. branch, "🌸")
             close_commit_popup()
 
-            -- Refresh branches
-            load_branches_async()
-
-            -- Fetch changed files asynchronously and decide mode inside the callback
+            -- 1. Fetch remaining changed files first
             get_changed_files_async(function(files)
                Ui.changed_files = files or {}
 
@@ -3214,7 +3209,10 @@ function M.toggle(opts)
                   end
                end
 
-               refresh_ui()
+               -- 2. Fetch fresh commits/branches, THEN render the UI
+               load_branches_async(function()
+                  refresh_ui()
+               end)
             end)
          end
 
