@@ -432,7 +432,7 @@ get_changed_files_async = function(cb)
 			Ui.tree_root = build_tree_from_files(files)
 			Ui.visible_tree_lines = flatten_tree(Ui.tree_root)
 
-			if cb then
+			if type(cb) == "function" then
 				cb()
 			end
 		end)
@@ -1026,31 +1026,27 @@ function fetch_git_graph_async(branch)
 	branch = branch or "HEAD"
 	-- Uses standard graph format with Hash | Date | Author | Message
 	local format = "%h %ad %an %s"
-	vim.system(
-		{
-			"git",
-			"--no-pager",
-			"log",
-			"--graph",
-			"--date=format:%H:%M",
-			"--pretty=format:" .. format,
-			"-n",
-			"40",
-			branch,
-		},
-		{ text = true },
-		function(obj)
-			vim.schedule(function()
-				if obj.code == 0 and obj.stdout then
-					local lines = vim.split(obj.stdout, "\n", { trimempty = true })
-					Ui.commit_graph_cache[branch] = #lines > 0 and lines or { "[No commits]" }
-					if type(render_right) == "function" then
-						render_right()
-					end
+	vim.system({
+		"git",
+		"--no-pager",
+		"log",
+		"--graph",
+		"--date=format:%H:%M",
+		"--pretty=format:" .. format,
+		"-n",
+		"40",
+		branch,
+	}, { text = true }, function(obj)
+		vim.schedule(function()
+			if obj.code == 0 and obj.stdout then
+				local lines = vim.split(obj.stdout, "\n", { trimempty = true })
+				Ui.commit_graph_cache[branch] = #lines > 0 and lines or { "[No commits]" }
+				if type(render_right) == "function" then
+					render_right()
 				end
-			end)
-		end
-	)
+			end
+		end)
+	end)
 end
 
 -------------------------------------------------------------------------------
@@ -1161,50 +1157,60 @@ local function get_diff_for_paths(paths)
 	return (vim.v.shell_error == 0 and #diff_lines > 0) and diff_lines or { "[No changes in folder]" }
 end
 
--- Helper to fetch file/directory diffs asynchronously
 function fetch_diff_async(path, is_dir)
-	local cmd = { "git", "--no-pager", "diff", "--color=never", "--", path }
+	if not path or path == "" then
+		return
+	end
+	local target_path = path -- Localize scope reference
+
+	local cmd = { "git", "--no-pager", "diff", "--color=never", "--", target_path }
 	if is_dir then
-		cmd = { "git", "--no-pager", "diff", "--color=never", path }
+		cmd = { "git", "--no-pager", "diff", "--color=never", target_path }
 	end
 
 	vim.system(cmd, { text = true }, function(obj)
 		vim.schedule(function()
 			if obj.code == 0 and obj.stdout then
 				local lines = vim.split(obj.stdout, "\n", { trimempty = true })
-				Ui.diff_cache[path] = #lines > 0 and lines or { "[No changes]" }
-				render_diff()
+				Ui.diff_cache[target_path] = #lines > 0 and lines or { "[No changes]" }
+				if type(render_diff) == "function" then
+					render_diff()
+				end
 			end
 		end)
 	end)
 end
 
--- Helper to fetch stash diffs asynchronously
 function fetch_stash_diff_async(stash_ref)
-	vim.system({ "git", "--no-pager", "stash", "show", "-p", stash_ref }, { text = true }, function(obj)
-		vim.schedule(function()
-			if obj.code == 0 and obj.stdout then
-				local lines = vim.split(obj.stdout, "\n", { trimempty = true })
-				Ui.diff_cache[stash_ref] = #lines > 0 and lines or { "[No changes in stash]" }
-				render_diff()
-			end
-		end)
-	end)
-end
-
--- Helper to fetch commit diffs asynchronously
-function fetch_commit_diff_async(hash)
-	if not hash then
+	if not stash_ref or stash_ref == "" then
 		return
 	end
+	local target_ref = stash_ref
 
-	vim.system({ "git", "--no-pager", "show", "--stat", "-p", hash }, { text = true }, function(obj)
+	vim.system({ "git", "--no-pager", "stash", "show", "-p", target_ref }, { text = true }, function(obj)
 		vim.schedule(function()
 			if obj.code == 0 and obj.stdout then
 				local lines = vim.split(obj.stdout, "\n", { trimempty = true })
-				if hash and hash ~= "" then
-					Ui.diff_cache[hash] = #lines > 0 and lines or { "[No diff output]" }
+				Ui.diff_cache[target_ref] = #lines > 0 and lines or { "[No changes in stash]" }
+				if type(render_diff) == "function" then
+					render_diff()
 				end
+			end
+		end)
+	end)
+end
+
+function fetch_commit_diff_async(hash)
+	if not hash or hash == "" then
+		return
+	end
+	local target_hash = hash
+
+	vim.system({ "git", "--no-pager", "show", "--stat", "-p", target_hash }, { text = true }, function(obj)
+		vim.schedule(function()
+			if obj.code == 0 and obj.stdout then
+				local lines = vim.split(obj.stdout, "\n", { trimempty = true })
+				Ui.diff_cache[target_hash] = #lines > 0 and lines or { "[No diff output]" }
 				if type(render_diff) == "function" then
 					render_diff()
 				end
@@ -1333,7 +1339,7 @@ refresh_ui = function(opts)
 
 			local function log_sub(step_name)
 				local elapsed = (vim.loop.hrtime() - t0) / 1e6
-				vim.notify(string.format("[Perf Debug]   └─ %s: %.2f ms", step_name, elapsed), vim.log.levels.DEBUG)
+				-- vim.notify(string.format("[Perf Debug]   └─ %s: %.2f ms", step_name, elapsed), vim.log.levels.DEBUG)
 			end
 
 			-- 1. Sync window layout & dimensions
@@ -1402,10 +1408,10 @@ refresh_ui = function(opts)
 							pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { Ui.selected_index, 0 })
 						end
 						local async_elapsed = (vim.loop.hrtime() - t0) / 1e6
-						vim.notify(
-							string.format("[Perf Debug] Async Background Callbacks Done: %.2f ms", async_elapsed),
-							vim.log.levels.DEBUG
-						)
+						-- vim.notify(
+						-- 	string.format("[Perf Debug] Async Background Callbacks Done: %.2f ms", async_elapsed),
+						-- 	vim.log.levels.DEBUG
+						-- )
 					end
 				end
 
@@ -2119,7 +2125,7 @@ function M.toggle(opts)
 	local t0 = vim.loop.hrtime()
 	local function log_step(name)
 		local elapsed = (vim.loop.hrtime() - t0) / 1e6 -- convert to milliseconds
-		vim.notify(string.format("[Perf Debug] %s: %.2f ms", name, elapsed), vim.log.levels.DEBUG)
+		-- vim.notify(string.format("[Perf Debug] %s: %.2f ms", name, elapsed), vim.log.levels.DEBUG)
 	end
 
 	-- 1. If windows are already open, close them (Toggle Off)
@@ -3388,21 +3394,21 @@ function M.toggle(opts)
 		-- Renames the commit under the cursor in the commit log (amends HEAD or rebases historical commits with topology preservation), or renames the selected branch in branches view-
 		vim.keymap.set("n", "r", function()
 			local win = vim.api.nvim_get_current_win()
-			vim.notify(
-				string.format(
-					"[Debug] Key 'r' pressed in Win ID: %s (Right Win: %s, Left Win: %s)",
-					win,
-					Ui.right_win,
-					Ui.left_win
-				),
-				vim.log.levels.DEBUG
-			)
+			-- vim.notify(
+			-- 	string.format(
+			-- 		"[Debug] Key 'r' pressed in Win ID: %s (Right Win: %s, Left Win: %s)",
+			-- 		win,
+			-- 		Ui.right_win,
+			-- 		Ui.left_win
+			-- 	),
+			-- 	vim.log.levels.DEBUG
+			-- )
 
 			-- 1. Rename Commit when inside the Right Window (Commit Log)
 			if win == Ui.right_win then
 				local cursor = vim.api.nvim_win_get_cursor(Ui.right_win)
 				local line = vim.api.nvim_buf_get_lines(Ui.right_buf, cursor[1] - 1, cursor[1], false)[1] or ""
-				vim.notify(string.format("[Debug] Cursor Line [%d]: '%s'", cursor[1], line), vim.log.levels.DEBUG)
+				-- vim.notify(string.format("[Debug] Cursor Line [%d]: '%s'", cursor[1], line), vim.log.levels.DEBUG)
 
 				-- Extract 7+ hex digit commit hash even if graph characters (*, |, \) precede it
 				local hash = line:match("%f[%w](%x%x%x%x%x%x%x+)%f[%W]") or line:match("(%x%x%x%x%x%x%x+)")
@@ -3418,40 +3424,40 @@ function M.toggle(opts)
 				local is_head = (full_hash == head_hash)
 
 				local current_msg = vim.fn.system("git log -1 --format=%s " .. hash):gsub("%s+$", "")
-				vim.notify(
-					string.format(
-						"[Debug] Parsed Hash: %s | Full: %s | HEAD: %s | Is HEAD: %s",
-						hash,
-						full_hash:sub(1, 7),
-						head_hash:sub(1, 7),
-						tostring(is_head)
-					),
-					vim.log.levels.DEBUG
-				)
+				-- vim.notify(
+				-- 	string.format(
+				-- 		"[Debug] Parsed Hash: %s | Full: %s | HEAD: %s | Is HEAD: %s",
+				-- 		hash,
+				-- 		full_hash:sub(1, 7),
+				-- 		head_hash:sub(1, 7),
+				-- 		tostring(is_head)
+				-- 	),
+				-- 	vim.log.levels.DEBUG
+				-- )
 
 				vim.ui.input({
 					prompt = "Rename commit (" .. hash:sub(1, 7) .. "): ",
 					default = current_msg,
 				}, function(new_msg)
 					if not new_msg or new_msg == "" or new_msg == current_msg then
-						vim.notify("[Debug] Input cancelled or unmodified.", vim.log.levels.DEBUG)
+						-- vim.notify("[Debug] Input cancelled or unmodified.", vim.log.levels.DEBUG)
 						return
 					end
 
 					if is_head then
 						-- Simple amend for HEAD commit
 						local cmd = "git commit --amend -m " .. vim.fn.shellescape(new_msg)
-						vim.notify("[Debug] Executing HEAD amend: " .. cmd, vim.log.levels.DEBUG)
+						-- vim.notify("[Debug] Executing HEAD amend: " .. cmd, vim.log.levels.DEBUG)
 
 						local out = vim.fn.system(cmd)
-						vim.notify(
-							string.format(
-								"[Debug] HEAD Amend exit code: %d | Output: %s",
-								vim.v.shell_error,
-								out:gsub("\n", " ")
-							),
-							vim.log.levels.DEBUG
-						)
+						-- vim.notify(
+						-- 	string.format(
+						-- 		"[Debug] HEAD Amend exit code: %d | Output: %s",
+						-- 		vim.v.shell_error,
+						-- 		out:gsub("\n", " ")
+						-- 	),
+						-- 	vim.log.levels.DEBUG
+						-- )
 
 						if vim.v.shell_error == 0 then
 							show_centered_message("Renamed HEAD commit", "✏️")
@@ -3495,26 +3501,23 @@ function M.toggle(opts)
 
 						vim.notify("[Debug] Executing rebase cmd: " .. git_cmd, vim.log.levels.DEBUG)
 						local out = vim.fn.system(git_cmd)
-						vim.notify(
-							string.format(
-								"[Debug] Rebase exit code: %d | Output: %s",
-								vim.v.shell_error,
-								out:gsub("\n", " ")
-							),
-							vim.log.levels.DEBUG
-						)
+						-- vim.notify(
+						-- 	string.format(
+						-- 		"[Debug] Rebase exit code: %d | Output: %s",
+						-- 		vim.v.shell_error,
+						-- 		out:gsub("\n", " ")
+						-- 	),
+						-- 	vim.log.levels.DEBUG
+						-- )
 
 						if vim.v.shell_error ~= 0 then
-							vim.notify(
-								"[Debug] Rebase error detected. Aborting rebase sequence...",
-								vim.log.levels.WARN
-							)
+							vim.notify("Rebase error detected. Aborting rebase sequence...", vim.log.levels.WARN)
 							local abort_out = vim.fn.system("git rebase --abort")
-							vim.notify("[Debug] Abort result: " .. abort_out:gsub("\n", " "), vim.log.levels.DEBUG)
+							vim.notify("Abort result: " .. abort_out:gsub("\n", " "), vim.log.levels.DEBUG)
 						end
 
 						if stashed then
-							vim.notify("[Debug] Popping stashed changes...", vim.log.levels.DEBUG)
+							vim.notify("Popping stashed changes...", vim.log.levels.DEBUG)
 							vim.fn.system("git stash pop")
 						end
 
@@ -3539,14 +3542,14 @@ function M.toggle(opts)
 				if not branch or branch == "" then
 					branch = Ui.branch_selected or "HEAD"
 				end
-				vim.notify(
-					string.format(
-						"[Debug] Branch Mode | Selected Index: %s | Target Branch: %s",
-						tostring(Ui.selected_index),
-						branch
-					),
-					vim.log.levels.DEBUG
-				)
+				-- vim.notify(
+				-- 	string.format(
+				-- 		"[Debug] Branch Mode | Selected Index: %s | Target Branch: %s",
+				-- 		tostring(Ui.selected_index),
+				-- 		branch
+				-- 	),
+				-- 	vim.log.levels.DEBUG
+				-- )
 
 				vim.ui.input({
 					prompt = "Rename branch '" .. branch .. "'",
