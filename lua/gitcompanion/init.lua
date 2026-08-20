@@ -1634,14 +1634,14 @@ function M.toggle(opts)
       vim.bo[buf].modifiable = true
    end
 
-   vim.notify(
-      string.format(
-         "[DEBUG Toggle Init] Mode: %s | Changed files: %d",
-         tostring(Ui.mode),
-         Ui.changed_files and #Ui.changed_files or 0
-      ),
-      vim.log.levels.INFO
-   )
+   -- vim.notify(
+   --    string.format(
+   --       "[DEBUG Toggle Init] Mode: %s | Changed files: %d",
+   --       tostring(Ui.mode),
+   --       Ui.changed_files and #Ui.changed_files or 0
+   --    ),
+   --    vim.log.levels.INFO
+   -- )
 
    -- 2. Screen Dimensions & Row Offsets
    local ui = vim.api.nvim_list_uis()[1]
@@ -1707,16 +1707,16 @@ function M.toggle(opts)
    })
 
    if Ui.mode == "branches" then
-      vim.notify(
-         string.format(
-            "[DEBUG Creating Right Win] Mode: %s | right_buf Valid: %s | log_row: %d | log_h: %d",
-            tostring(Ui.mode),
-            tostring(Ui.right_buf and vim.api.nvim_buf_is_valid(Ui.right_buf)),
-            log_row,
-            log_h
-         ),
-         vim.log.levels.WARN
-      )
+      -- vim.notify(
+      --    string.format(
+      --       "[DEBUG Creating Right Win] Mode: %s | right_buf Valid: %s | log_row: %d | log_h: %d",
+      --       tostring(Ui.mode),
+      --       tostring(Ui.right_buf and vim.api.nvim_buf_is_valid(Ui.right_buf)),
+      --       log_row,
+      --       log_h
+      --    ),
+      --    vim.log.levels.WARN
+      -- )
 
       Ui.right_win = vim.api.nvim_open_win(Ui.right_buf, false, {
          relative = "editor",
@@ -1963,14 +1963,14 @@ function M.toggle(opts)
       load_branches()
    end
 
-   vim.notify(
-      string.format(
-         "[DEBUG Sec 6 Pre-Check] Ui.mode: %s | changed_files count: %d",
-         tostring(Ui.mode),
-         Ui.changed_files and #Ui.changed_files or 0
-      ),
-      vim.log.levels.WARN
-   )
+   -- vim.notify(
+   --    string.format(
+   --       "[DEBUG Sec 6 Pre-Check] Ui.mode: %s | changed_files count: %d",
+   --       tostring(Ui.mode),
+   --       Ui.changed_files and #Ui.changed_files or 0
+   --    ),
+   --    vim.log.levels.WARN
+   -- )
 
    -- Dynamically pick default mode based on freshly populated changed files
    if Ui.changed_files and #Ui.changed_files > 0 then
@@ -1980,10 +1980,10 @@ function M.toggle(opts)
    end
    Ui.selected_index = 1
 
-   vim.notify(
-      string.format("[DEBUG Sec 6 Post-Check] Ui.mode evaluated to: %s", tostring(Ui.mode)),
-      vim.log.levels.WARN
-   )
+   -- vim.notify(
+   --    string.format("[DEBUG Sec 6 Post-Check] Ui.mode evaluated to: %s", tostring(Ui.mode)),
+   --    vim.log.levels.WARN
+   -- )
 
    if type(refresh_ui) == "function" then
       refresh_ui()
