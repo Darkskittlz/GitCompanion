@@ -1,6 +1,13 @@
 local M = {}
 
 M.conflict_ns = vim.api.nvim_create_namespace("gitcompanion_conflicts")
+M.status_ns = vim.api.nvim_create_namespace("gitcompanion_status")
+
+-- State tracking for active floating resolver sessions
+M.session_state = {
+   total_conflicts = 0,
+   resolved_conflicts = 0,
+}
 
 local function debug_log(msg, level)
    level = level or vim.log.levels.INFO
@@ -29,6 +36,103 @@ end
 -- Strip ANSI color escape codes from string outputs
 local function strip_ansi(str)
    return str:gsub("\27%[[0-9;]*[mK]", ""):gsub("\r", "")
+end
+
+-- Count total conflict blocks in a set of lines
+local function count_conflict_blocks(lines)
+   local count = 0
+   for _, line in ipairs(lines) do
+      if line:match("^<<<<<<<") then
+         count = count + 1
+      end
+   end
+   return count
+end
+
+--------------------------------------------------------------------------------
+-- UI EXTENSIONS (COUNTER & CONFIRMATION PROMPT)
+--------------------------------------------------------------------------------
+
+function M.update_top_right_counter(bufnr)
+   if not vim.api.nvim_buf_is_valid(bufnr) then
+      return
+   end
+   vim.api.nvim_buf_clear_namespace(bufnr, M.status_ns, 0, -1)
+
+   local total = M.session_state.total_conflicts
+   local resolved = M.session_state.resolved_conflicts
+   local status_text = string.format(" Conflicts: %d/%d resolved ", resolved, total)
+
+   -- Render persistent top-right extmark on the first line
+   vim.api.nvim_buf_set_extmark(bufnr, M.status_ns, 0, 0, {
+      virt_text = { { status_text, "DiagnosticInfo" } },
+      virt_text_pos = "right_align",
+   })
+end
+
+function M.prompt_proceed_with_merge(cur_win, target_path)
+   local buf = vim.api.nvim_create_buf(false, true)
+
+   local lines = {
+      " All merge conflicts resolved!",
+      " Would you like to proceed with your merge?",
+      "",
+      " [y] Yes, save and proceed   [n] No, keep reviewing",
+   }
+
+   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+   vim.bo[buf].modifiable = false
+   vim.bo[buf].buftype = "nofile"
+
+   local ui = get_safe_ui()
+   local w, h = 54, 6
+   local row = math.floor((ui.height - h) / 2)
+   local col = math.floor((ui.width - w) / 2)
+
+   local win = vim.api.nvim_open_win(buf, true, {
+      relative = "editor",
+      width = w,
+      height = h,
+      row = row,
+      col = col,
+      style = "minimal",
+      border = "rounded",
+      title = " Complete Merge ",
+      title_pos = "center",
+      zindex = 850,
+   })
+
+   vim.api.nvim_set_hl(0, "GitCompanionPromptKey", { fg = "#00d7ff", bold = true })
+   vim.api.nvim_buf_add_highlight(buf, -1, "GitCompanionPromptKey", 3, 2, 5)
+   vim.api.nvim_buf_add_highlight(buf, -1, "GitCompanionPromptKey", 3, 31, 34)
+
+   local function close()
+      if vim.api.nvim_win_is_valid(win) then
+         vim.api.nvim_win_close(win, true)
+      end
+   end
+
+   local function finish_merge()
+      close()
+      if cur_win and vim.api.nvim_win_is_valid(cur_win) then
+         vim.api.nvim_win_close(cur_win, true)
+      end
+      vim.notify(
+         "Merge conflict resolution finalized for " .. vim.fn.fnamemodify(target_path, ":t"),
+         vim.log.levels.INFO
+      )
+   end
+
+   vim.keymap.set("n", "y", finish_merge, { buffer = buf, silent = true, nowait = true })
+   vim.keymap.set("n", "<CR>", finish_merge, { buffer = buf, silent = true, nowait = true })
+
+   vim.keymap.set("n", "n", function()
+      close()
+   end, { buffer = buf, silent = true, nowait = true })
+
+   vim.keymap.set("n", "<Esc>", function()
+      close()
+   end, { buffer = buf, silent = true, nowait = true })
 end
 
 --------------------------------------------------------------------------------
@@ -77,7 +181,6 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_path, mode)
    end
 
    if not start_line then
-      -- vim.notify("Cursor is not inside a valid conflict block", vim.log.levels.WARN)
       return
    end
 
@@ -91,7 +194,6 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_path, mode)
    end
 
    if not (separator_line and end_line and cursor_line <= end_line) then
-      -- vim.notify("Cursor is not inside a valid conflict block", vim.log.levels.WARN)
       return
    end
 
@@ -118,23 +220,24 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_path, mode)
    M.sync_to_target_file(float_bufnr, target_path)
 
    local remaining = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
-   local has_more = false
-   local next_conflict_line = nil
+   local remaining_count = count_conflict_blocks(remaining)
 
+   -- Update session progress counter
+   M.session_state.resolved_conflicts = M.session_state.total_conflicts - remaining_count
+   M.update_top_right_counter(float_bufnr)
+
+   local next_conflict_line = nil
    for idx, l in ipairs(remaining) do
       if l:match("^<<<<<<<") then
-         has_more = true
          if not next_conflict_line and idx >= start_line then
             next_conflict_line = idx
          end
       end
    end
 
-   if not has_more then
-      -- vim.notify("All conflicts resolved in file!", vim.log.levels.INFO)
-      if cur_win and vim.api.nvim_win_is_valid(cur_win) and vim.api.nvim_win_get_config(cur_win).relative ~= "" then
-         vim.api.nvim_win_close(cur_win, true)
-      end
+   if remaining_count == 0 then
+      -- LazyGit-style completion prompt
+      M.prompt_proceed_with_merge(cur_win, target_path)
    else
       if next_conflict_line then
          safe_set_cursor(cur_win, next_conflict_line, 0)
@@ -150,7 +253,6 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_path, mode)
 end
 
 function M.open_merge_conflict_resolver(file_path)
-   -- Clean path input thoroughly
    local clean_path = strip_ansi(file_path):match("^%s*(.-)%s*$")
    local full_path = vim.fn.fnamemodify(clean_path, ":p")
 
@@ -158,7 +260,6 @@ function M.open_merge_conflict_resolver(file_path)
 
    if vim.fn.filereadable(full_path) == 0 then
       debug_log("File does not exist or cannot be read at path: " .. full_path, vim.log.levels.ERROR)
-      -- vim.notify("Error: File not found -> " .. full_path, vim.log.levels.ERROR)
       return
    end
 
@@ -167,7 +268,11 @@ function M.open_merge_conflict_resolver(file_path)
    local float_bufnr = vim.api.nvim_create_buf(false, true)
    vim.api.nvim_buf_set_lines(float_bufnr, 0, -1, false, file_lines)
 
-   -- Set filetype by extension manually to avoid relying on unlinked buffers
+   -- Initialize conflict tracking state
+   local initial_conflicts = count_conflict_blocks(file_lines)
+   M.session_state.total_conflicts = initial_conflicts
+   M.session_state.resolved_conflicts = 0
+
    local ft = nil
    if vim.filetype.match then
       ft = vim.filetype.match({ filename = full_path })
@@ -200,6 +305,7 @@ function M.open_merge_conflict_resolver(file_path)
 
    M.setup_keymaps(float_bufnr, full_path, winnr)
    M.highlight_conflicts(float_bufnr)
+   M.update_top_right_counter(float_bufnr)
 
    for i, line in ipairs(file_lines) do
       if line:match("^<<<<<<<") then
