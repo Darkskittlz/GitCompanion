@@ -406,6 +406,15 @@ end
 -- 🧩 Load list of changed files (staged + unstaged)
 ---------------------------------------------------------------------------
 local function get_changed_files_async(cb)
+   -- clear cached file diffs so fresh working tree state is fetched
+   Ui.diff_cache = Ui.diff_cache or {}
+   for key in pairs(Ui.diff_cache) do
+      -- If cache keys for working files are paths (don't match commit hashes or stashes)
+      if not key:match("^%x%x%x%x%x%x%x+") and not key:match("^stash@") then
+         Ui.diff_cache[key] = nil
+      end
+   end
+
    vim.system({ "git", "status", "--porcelain" }, { text = true }, function(obj)
       vim.schedule(function()
          local status_lines = vim.split(obj.stdout or "", "\n", { trimempty = true })
@@ -1339,6 +1348,7 @@ render_diff = function()
 
    vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.diff_buf })
 end
+-- commet
 
 ---------------------------------------------------------------------------
 -- Refresh UI on close
