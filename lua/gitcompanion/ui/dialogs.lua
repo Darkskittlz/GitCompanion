@@ -115,7 +115,7 @@ local function on_commit_success(state)
 		debug_log("Calling load_branches_async")
 		load_branches(function(branches)
 			debug_log("Async load_branches returned " .. (branches and #branches or 0) .. " branches")
-			if branches then
+			if branches and #branches > 0 then
 				Ui.branches = branches
 				sync_branch_selection(branches, "Async Callback Sync")
 			end

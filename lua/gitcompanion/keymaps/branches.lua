@@ -8,6 +8,7 @@ function M.attach(buf, state)
       return
    end
 
+   -- comment
    local base_opts = { buffer = target_buf, noremap = true, silent = true }
 
    local function map(mode, lhs, rhs, desc)
