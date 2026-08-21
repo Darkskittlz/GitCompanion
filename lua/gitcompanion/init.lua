@@ -4,7 +4,10 @@ local config = require("gitcompanion.config")
 local git_diff = require("gitcompanion.git.diff")
 
 -- TODO LIST
--- TODO: Ensure all keymaps are working
+-- TODO: fix discard files keymap d
+-- TODO: fix delete branch keymap d
+-- TODO: fix stash keymap not auto updating changed files state
+-- TODO: fix stash mode not showing current stashes
 
 -- Require keymap submodules
 local global_keymaps = require("gitcompanion.keymaps.global")
