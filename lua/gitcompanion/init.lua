@@ -3,6 +3,9 @@ local conflicts = require("gitcompanion.git.conflicts")
 local config = require("gitcompanion.config")
 local git_diff = require("gitcompanion.git.diff")
 
+-- TODO LIST
+-- TODO: Ensure all keymaps are working
+
 -- Require keymap submodules
 local global_keymaps = require("gitcompanion.keymaps.global")
 local branch_keymaps = require("gitcompanion.keymaps.branches")
