@@ -14,17 +14,29 @@ local function on_commit_success(state)
 	Ui.flat_nodes = {}
 	Ui._last_rendered_files = nil
 
-	-- 2. Refocus mode to "branches"
+	-- 2. Clear commit graph & diff caches so the new commit shows up
+	Ui.commit_graph_cache = {}
+	Ui.diff_cache = {}
+
+	-- 3. Refocus mode to "branches"
 	Ui.mode = "branches"
 	Ui.selected_index = 1
 
-	-- 3. Fetch latest branch commit logs & refresh UI
+	-- 4. Fetch latest branch commit logs & refresh UI
 	local status = require("gitcompanion.git.status")
 	local layout = require("gitcompanion.ui.layout")
+	local graph = require("gitcompanion.git.graph")
 
 	local load_status = status.load_status_async or state.load_status_async
 	if type(load_status) == "function" then
 		load_status()
+	end
+
+	-- Force re-fetch the commit graph for the current selected branch
+	local branch = Ui.branch_selected or Ui.current_branch or "HEAD"
+	local fetch_graph = graph.fetch_git_graph_async or Ui.fetch_git_graph_async
+	if type(fetch_graph) == "function" then
+		fetch_graph(branch)
 	end
 
 	local load_branches = status.load_branches_async or state.load_branches_async
