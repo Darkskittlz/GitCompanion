@@ -142,13 +142,20 @@ function M.toggle(opts)
 		end
 	end
 
-	-- Initial Mode Selection
+	-- Initial Mode Selection (Only default if mode is explicitly unassigned)
 	if not Ui.mode then
 		local changed = vim.fn.systemlist("git status --porcelain -uall")
 		Ui.mode = (#changed > 0) and "files" or "branches"
 		debug_log("Initial mode chosen: " .. tostring(Ui.mode) .. " (changed count: " .. #changed .. ")")
 	end
 	Ui.selected_index = Ui.selected_index or 1
+
+	-- Sync active head branch directly to avoid mode layout desyncs
+	local current_head = vim.trim(vim.fn.system("git rev-parse --abbrev-ref HEAD"))
+	if current_head ~= "" and not current_head:match("fatal") then
+		Ui.current_branch = current_head
+		Ui.branch_selected = current_head
+	end
 
 	-- Screen Dimensions
 	local active_ui = vim.api.nvim_list_uis()[1]
@@ -340,14 +347,14 @@ function M.toggle(opts)
 
 			current_ui.changed_files = files or {}
 
-			if not current_ui.user_navigated then
+			-- Respect current mode assignment (e.g. set by on_commit_success)
+			if not current_ui.user_navigated and not current_ui.mode then
 				if #current_ui.changed_files > 0 then
 					current_ui.mode = "files"
 				else
-					current_ui.mode = current_ui.mode or "branches"
+					current_ui.mode = "branches"
 				end
 			end
-			current_ui.selected_index = 1
 
 			if type(update_window_layout) == "function" then
 				update_window_layout()

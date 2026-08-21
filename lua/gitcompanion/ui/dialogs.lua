@@ -144,8 +144,6 @@ local function on_commit_success(state)
 	end
 end
 
--- comment
-
 function M.open_commit_modal(state)
 	local Ui = state.Ui or state
 	local branch = (Ui.branches and Ui.branches[Ui.selected_index]) or Ui.branch_selected or "HEAD"
