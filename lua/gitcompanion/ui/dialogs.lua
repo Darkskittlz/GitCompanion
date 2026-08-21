@@ -21,21 +21,37 @@ local function on_commit_success(state)
 	-- 3. Refocus mode to "branches"
 	Ui.mode = "branches"
 
-	-- Match selected_index to active branch instead of hardcoding to 1
-	local active_branch = Ui.current_branch or Ui.branch_selected
-	if Ui.branches and active_branch then
-		for idx, b in ipairs(Ui.branches) do
+	-- 4. Get ACTUAL current branch synchronously from Git to avoid race conditions
+	local current_head = vim.trim(vim.fn.system("git rev-parse --abbrev-ref HEAD"))
+	if current_head ~= "" and not current_head:match("fatal") then
+		Ui.current_branch = current_head
+		Ui.branch_selected = current_head
+	end
+
+	local active_branch = Ui.current_branch or Ui.branch_selected or "HEAD"
+
+	-- Helper to align index and update active cursor
+	local function sync_branch_selection(branch_list)
+		if not branch_list or #branch_list == 0 then
+			return
+		end
+		for idx, b in ipairs(branch_list) do
 			if b == active_branch then
 				Ui.selected_index = idx
 				Ui.branch_selected = b
 				break
 			end
 		end
-	else
-		Ui.selected_index = 1
+
+		-- Explicitly set window cursor to match selected_index
+		if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
+			pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { Ui.selected_index, 0 })
+		end
 	end
 
-	-- 4. Fetch latest branch commit logs & refresh UI
+	sync_branch_selection(Ui.branches)
+
+	-- 5. Fetch status and graph for true active branch
 	local status = require("gitcompanion.git.status")
 	local layout = require("gitcompanion.ui.layout")
 	local graph = require("gitcompanion.git.graph")
@@ -45,10 +61,9 @@ local function on_commit_success(state)
 		load_status()
 	end
 
-	local branch = Ui.branch_selected or Ui.current_branch or "HEAD"
 	local fetch_graph = graph.fetch_git_graph_async or Ui.fetch_git_graph_async
 	if type(fetch_graph) == "function" then
-		fetch_graph(branch)
+		fetch_graph(active_branch)
 	end
 
 	local load_branches = status.load_branches_async or state.load_branches_async
@@ -56,15 +71,14 @@ local function on_commit_success(state)
 		load_branches(function(branches)
 			if branches then
 				Ui.branches = branches
-				-- Re-verify index after async branch reload
-				for idx, b in ipairs(branches) do
-					if b == active_branch then
-						Ui.selected_index = idx
-						Ui.branch_selected = b
-						break
-					end
-				end
+				sync_branch_selection(branches)
 			end
+
+			-- Re-fetch graph after fresh branch list loads
+			if type(fetch_graph) == "function" then
+				fetch_graph(Ui.branch_selected or active_branch)
+			end
+
 			if type(state.refresh_ui) == "function" then
 				state.refresh_ui()
 			elseif type(layout.refresh_ui) == "function" then
