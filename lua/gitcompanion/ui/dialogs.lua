@@ -1,11 +1,20 @@
 -- lua/gitcompanion/ui/dialogs.lua
 local M = {}
 
+local function debug_log(msg, level)
+	vim.schedule(function()
+		vim.notify("[CommitSuccess Debug] " .. msg, level or vim.log.levels.INFO)
+	end)
+end
+
 local function on_commit_success(state)
 	if not state then
+		debug_log("Aborted: state is nil", vim.log.levels.WARN)
 		return
 	end
 	local Ui = state.Ui or state
+
+	debug_log("Starting on_commit_success | Initial Mode: " .. tostring(Ui.mode))
 
 	-- 1. Reset state changed files and clear tree root caches
 	Ui.changed_files = {}
@@ -23,33 +32,66 @@ local function on_commit_success(state)
 
 	-- 4. Get ACTUAL current branch synchronously from Git to avoid race conditions
 	local current_head = vim.trim(vim.fn.system("git rev-parse --abbrev-ref HEAD"))
+	debug_log("Git HEAD rev-parse output: '" .. current_head .. "'")
+
 	if current_head ~= "" and not current_head:match("fatal") then
 		Ui.current_branch = current_head
 		Ui.branch_selected = current_head
 	end
 
 	local active_branch = Ui.current_branch or Ui.branch_selected or "HEAD"
+	debug_log("Resolved active_branch: " .. active_branch)
 
 	-- Helper to align index and update active cursor
-	local function sync_branch_selection(branch_list)
+	local function sync_branch_selection(branch_list, stage_name)
+		stage_name = stage_name or "sync"
+		local count = branch_list and #branch_list or 0
+		debug_log(string.format("[%s] Syncing branches (Count: %d). Looking for: %s", stage_name, count, active_branch))
+
 		if not branch_list or #branch_list == 0 then
+			debug_log(string.format("[%s] branch_list is empty/nil", stage_name), vim.log.levels.WARN)
 			return
 		end
+
+		local found = false
 		for idx, b in ipairs(branch_list) do
+			debug_log(string.format("[%s] Index %d: %s", stage_name, idx, b))
 			if b == active_branch then
 				Ui.selected_index = idx
 				Ui.branch_selected = b
+				found = true
+				debug_log(string.format("[%s] MATCH FOUND at index %d", stage_name, idx))
 				break
 			end
 		end
 
+		if not found then
+			debug_log(
+				string.format("[%s] Active branch '%s' NOT FOUND in list", stage_name, active_branch),
+				vim.log.levels.WARN
+			)
+		end
+
 		-- Explicitly set window cursor to match selected_index
 		if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
-			pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { Ui.selected_index, 0 })
+			local line_count = vim.api.nvim_buf_line_count(Ui.left_buf or 0)
+			local target = math.max(1, math.min(Ui.selected_index or 1, line_count))
+			debug_log(
+				string.format(
+					"[%s] Setting left_win cursor to line %d (selected_index: %s, line_count: %d)",
+					stage_name,
+					target,
+					tostring(Ui.selected_index),
+					line_count
+				)
+			)
+			pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { target, 0 })
+		else
+			debug_log(string.format("[%s] left_win is invalid or nil", stage_name), vim.log.levels.WARN)
 		end
 	end
 
-	sync_branch_selection(Ui.branches)
+	sync_branch_selection(Ui.branches, "Initial Sync")
 
 	-- 5. Fetch status and graph for true active branch
 	local status = require("gitcompanion.git.status")
@@ -58,27 +100,34 @@ local function on_commit_success(state)
 
 	local load_status = status.load_status_async or state.load_status_async
 	if type(load_status) == "function" then
+		debug_log("Calling load_status_async")
 		load_status()
 	end
 
 	local fetch_graph = graph.fetch_git_graph_async or Ui.fetch_git_graph_async
 	if type(fetch_graph) == "function" then
+		debug_log("Calling fetch_git_graph_async for: " .. active_branch)
 		fetch_graph(active_branch)
 	end
 
 	local load_branches = status.load_branches_async or state.load_branches_async
 	if type(load_branches) == "function" then
+		debug_log("Calling load_branches_async")
 		load_branches(function(branches)
+			debug_log("Async load_branches returned " .. (branches and #branches or 0) .. " branches")
 			if branches then
 				Ui.branches = branches
-				sync_branch_selection(branches)
+				sync_branch_selection(branches, "Async Callback Sync")
 			end
 
 			-- Re-fetch graph after fresh branch list loads
 			if type(fetch_graph) == "function" then
-				fetch_graph(Ui.branch_selected or active_branch)
+				local target = Ui.branch_selected or active_branch
+				debug_log("Re-fetching graph post-async for: " .. target)
+				fetch_graph(target)
 			end
 
+			debug_log("Triggering UI refresh from async callback")
 			if type(state.refresh_ui) == "function" then
 				state.refresh_ui()
 			elseif type(layout.refresh_ui) == "function" then
@@ -86,6 +135,7 @@ local function on_commit_success(state)
 			end
 		end)
 	else
+		debug_log("load_branches_async not found, triggering immediate refresh", vim.log.levels.WARN)
 		if type(state.refresh_ui) == "function" then
 			state.refresh_ui()
 		elseif type(layout.refresh_ui) == "function" then
