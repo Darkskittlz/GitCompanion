@@ -14,15 +14,37 @@ function M.attach(buf, state)
       vim.keymap.set(mode, lhs, rhs, vim.tbl_extend("force", base_opts, { desc = desc }))
    end
 
+   -- Helper: Sync selected index with branch_selected name
+   local function sync_selected_index()
+      if not Ui.branches or not Ui.branch_selected then
+         return
+      end
+      for idx, b in ipairs(Ui.branches) do
+         local clean_b = b:gsub("^%*%s*", ""):gsub("%s+$", "")
+         if clean_b == Ui.branch_selected then
+            Ui.selected_index = idx
+            break
+         end
+      end
+   end
+
    -- Helper: Get Selected Branch
    local function get_selected_branch()
       if Ui.mode ~= "branches" then
-         return nil
+         return Ui.branch_selected or nil
       end
 
-      local branch = Ui.branches and Ui.branches[Ui.selected_index]
+      local branch = nil
+      if Ui.branches and Ui.selected_index and Ui.branches[Ui.selected_index] then
+         branch = Ui.branches[Ui.selected_index]
+      end
+
       if not branch or branch == "" then
-         branch = Ui.branch_selected or "HEAD"
+         branch = Ui.branch_selected
+      end
+
+      if not branch or branch == "" then
+         return nil
       end
 
       return branch:gsub("^%*%s*", ""):gsub("%s+$", "")
@@ -51,26 +73,18 @@ function M.attach(buf, state)
                Ui.branch_selected = new_branch
             end
 
-            if Ui.branches then
-               Ui.branches = vim.fn.systemlist("git branch --format='%(refname:short)'")
-               for idx, b in ipairs(Ui.branches) do
-                  if b == new_branch then
-                     Ui.selected_index = idx
-                     break
-                  end
-               end
-            end
-
             if type(state.show_centered_message) == "function" then
                state.show_centered_message("Renamed branch: " .. branch .. " ➔ " .. new_branch, "🌿")
             end
             if type(state.load_branches_async) == "function" then
                state.load_branches_async(function()
+                  sync_selected_index()
                   if type(state.refresh_ui) == "function" then
                      state.refresh_ui({ skip_fetch = true })
                   end
                end)
             elseif type(state.refresh_ui) == "function" then
+               sync_selected_index()
                state.refresh_ui()
             end
          else
@@ -131,11 +145,13 @@ function M.attach(buf, state)
 
                if type(state.load_branches_async) == "function" then
                   state.load_branches_async(function()
+                     sync_selected_index()
                      if type(state.refresh_ui) == "function" then
                         state.refresh_ui({ skip_fetch = true })
                      end
                   end)
                elseif type(state.refresh_ui) == "function" then
+                  sync_selected_index()
                   state.refresh_ui()
                end
             end)
@@ -232,19 +248,19 @@ function M.attach(buf, state)
                      end
                   end
 
-                  -- Invalidate cached commit graph for the pushed branch
                   if Ui.commit_graph_cache and Ui.branch_selected then
                      Ui.commit_graph_cache[Ui.branch_selected] = nil
                   end
 
-                  -- Reload async branch info to pick up ↑/↓ status changes, then refresh UI
                   if type(state.load_branches_async) == "function" then
                      state.load_branches_async(function()
+                        sync_selected_index()
                         if type(state.refresh_ui) == "function" then
                            state.refresh_ui({ skip_fetch = true })
                         end
                      end)
                   elseif type(state.refresh_ui) == "function" then
+                     sync_selected_index()
                      state.refresh_ui()
                   end
                end)
@@ -257,7 +273,6 @@ function M.attach(buf, state)
 
       if dry_output:match("rejected") or dry_output:match("non-fast-forward") then
          stop_spinner()
-
          vim.ui.input({
             prompt = "Branch has diverged. Force push? (y/N): ",
          }, function(answer)
@@ -329,21 +344,16 @@ function M.attach(buf, state)
             on_exit = function(_, exit_code)
                vim.schedule(function()
                   if exit_code == 0 then
-                     Ui.branches = vim.fn.systemlist("git branch --format='%(refname:short)'")
-                     for idx, b in ipairs(Ui.branches) do
-                        if b == new_branch then
-                           Ui.selected_index = idx
-                           break
-                        end
-                     end
-
+                     Ui.branch_selected = new_branch
                      if type(state.load_branches_async) == "function" then
                         state.load_branches_async(function()
+                           sync_selected_index()
                            if type(state.refresh_ui) == "function" then
                               state.refresh_ui({ skip_fetch = true })
                            end
                         end)
                      elseif type(state.refresh_ui) == "function" then
+                        sync_selected_index()
                         state.refresh_ui()
                      end
                   else
@@ -368,7 +378,7 @@ function M.attach(buf, state)
       end
 
       local orig_win = vim.api.nvim_get_current_win()
-      local target_branch = Ui.branch_selected
+      local target_branch = get_selected_branch()
 
       if not target_branch or target_branch == "" then
          vim.notify("No branch selected!", vim.log.levels.ERROR)
@@ -482,6 +492,7 @@ function M.attach(buf, state)
          end
          Ui.mode = "branches"
          if type(state.refresh_ui) == "function" then
+            sync_selected_index()
             state.refresh_ui()
          end
       end
@@ -530,11 +541,13 @@ function M.attach(buf, state)
 
                   if type(state.load_branches_async) == "function" then
                      state.load_branches_async(function()
+                        sync_selected_index()
                         if type(state.refresh_ui) == "function" then
                            state.refresh_ui({ skip_fetch = true })
                         end
                      end)
                   elseif type(state.refresh_ui) == "function" then
+                     sync_selected_index()
                      state.refresh_ui()
                   end
                end)
