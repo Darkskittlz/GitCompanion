@@ -26,6 +26,7 @@ function M.open_commit_modal(state)
       zindex = 200,
    })
 
+   -- comment
    -- 2. Staged Diff Buffer & Window
    local buf_diff = vim.api.nvim_create_buf(false, true)
    vim.bo[buf_diff].buftype = "nofile"
