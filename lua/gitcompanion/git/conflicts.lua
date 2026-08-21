@@ -191,10 +191,9 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_path, mode, orig_win)
 	local cursor_line = vim.api.nvim_win_get_cursor(cur_win)[1]
 	local lines = vim.api.nvim_buf_get_lines(float_bufnr, 0, -1, false)
 
-	debug_log(string.format("Attempting resolution mode '%s' at line %d", mode, cursor_line))
-
 	local start_line, separator_line, end_line = nil, nil, nil
 
+	-- Find the conflict start marker above or at the cursor
 	for i = cursor_line, 1, -1 do
 		if lines[i] and lines[i]:match("^<<<<<<<") then
 			start_line = i
@@ -207,6 +206,7 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_path, mode, orig_win)
 		return
 	end
 
+	-- Find separator and end markers below the start marker
 	for i = start_line, #lines do
 		if lines[i]:match("^=======") and not separator_line then
 			separator_line = i
@@ -216,8 +216,9 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_path, mode, orig_win)
 		end
 	end
 
-	if not (separator_line and end_line and cursor_line <= end_line) then
-		debug_log("Invalid conflict block bounds detected relative to cursor", vim.log.levels.WARN)
+	-- Validate bounds and ensure cursor is actually within this conflict block
+	if not (separator_line and end_line and cursor_line >= start_line and cursor_line <= end_line) then
+		debug_log("Cursor position is outside valid conflict bounds", vim.log.levels.WARN)
 		return
 	end
 
@@ -240,6 +241,7 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_path, mode, orig_win)
 		end
 	end
 
+	vim.bo[float_bufnr].modifiable = true
 	vim.api.nvim_buf_set_lines(float_bufnr, start_line - 1, end_line, false, keep_lines)
 	M.sync_to_target_file(float_bufnr, target_path)
 
@@ -249,28 +251,43 @@ function M.resolve_conflict_at_cursor(float_bufnr, target_path, mode, orig_win)
 	M.session_state.resolved_conflicts = M.session_state.total_conflicts - remaining_count
 	M.update_top_right_counter(float_bufnr)
 
-	local next_conflict_line = nil
-	for idx, l in ipairs(remaining) do
-		if l:match("^<<<<<<<") then
-			if not next_conflict_line and idx >= start_line then
-				next_conflict_line = idx
-			end
-		end
-	end
-
 	if remaining_count == 0 then
 		debug_log("All conflict blocks resolved. Triggering prompt.")
 		M.prompt_proceed_with_merge(cur_win, target_path, orig_win)
 	else
-		if next_conflict_line then
-			safe_set_cursor(cur_win, next_conflict_line, 0)
-		else
-			for idx, l in ipairs(remaining) do
-				if l:match("^<<<<<<<") then
-					safe_set_cursor(cur_win, idx, 0)
-					break
-				end
+		local next_line = nil
+		for idx, l in ipairs(remaining) do
+			if l:match("^<<<<<<<") and idx >= start_line then
+				next_line = idx
+				break
 			end
+		end
+		safe_set_cursor(cur_win, next_line or 1, 0)
+	end
+end
+
+function M.handle_merge_result(cmd_output, exit_code, orig_win)
+	orig_win = orig_win or vim.api.nvim_get_current_win()
+	local clean_output = strip_ansi(cmd_output)
+
+	if exit_code ~= 0 and string.find(clean_output, "CONFLICT") then
+		local conflicted_file = clean_output:match("Merge conflict in%s+(.-)%r?$")
+			or clean_output:match("CONFLICT%s*%(.-%):%s*Merge conflict in%s+(.-)%r?$")
+
+		if _G.close_floating and type(_G.close_floating) == "function" then
+			_G.close_floating()
+		end
+
+		if conflicted_file then
+			conflicted_file = vim.trim(conflicted_file)
+			debug_log("Detected conflicted file path: " .. conflicted_file)
+			M.prompt_resolve_conflicts(conflicted_file, function(should_resolve)
+				if should_resolve then
+					M.open_merge_conflict_resolver(conflicted_file, orig_win)
+				end
+			end)
+		else
+			debug_log("Failed to extract valid filename from conflict output", vim.log.levels.WARN)
 		end
 	end
 end
