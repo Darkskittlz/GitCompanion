@@ -65,9 +65,12 @@ function M.attach(buf, state)
                state.show_centered_message("Renamed branch: " .. branch .. " ➔ " .. new_branch, "🌿")
             end
             if type(state.load_branches_async) == "function" then
-               state.load_branches_async()
-            end
-            if type(state.refresh_ui) == "function" then
+               state.load_branches_async(function()
+                  if type(state.refresh_ui) == "function" then
+                     state.refresh_ui({ skip_fetch = true })
+                  end
+               end)
+            elseif type(state.refresh_ui) == "function" then
                state.refresh_ui()
             end
          else
@@ -126,7 +129,13 @@ function M.attach(buf, state)
                   state.show_floating_pair(stdout_lines, stderr_lines)
                end
 
-               if type(state.refresh_ui) == "function" then
+               if type(state.load_branches_async) == "function" then
+                  state.load_branches_async(function()
+                     if type(state.refresh_ui) == "function" then
+                        state.refresh_ui({ skip_fetch = true })
+                     end
+                  end)
+               elseif type(state.refresh_ui) == "function" then
                   state.refresh_ui()
                end
             end)
@@ -222,7 +231,20 @@ function M.attach(buf, state)
                         state.show_centered_message("⚠️ Failed to push branch: " .. current_branch)
                      end
                   end
-                  if type(state.refresh_ui) == "function" then
+
+                  -- Invalidate cached commit graph for the pushed branch
+                  if Ui.commit_graph_cache and Ui.branch_selected then
+                     Ui.commit_graph_cache[Ui.branch_selected] = nil
+                  end
+
+                  -- Reload async branch info to pick up ↑/↓ status changes, then refresh UI
+                  if type(state.load_branches_async) == "function" then
+                     state.load_branches_async(function()
+                        if type(state.refresh_ui) == "function" then
+                           state.refresh_ui({ skip_fetch = true })
+                        end
+                     end)
+                  elseif type(state.refresh_ui) == "function" then
                      state.refresh_ui()
                   end
                end)
@@ -315,7 +337,13 @@ function M.attach(buf, state)
                         end
                      end
 
-                     if type(state.refresh_ui) == "function" then
+                     if type(state.load_branches_async) == "function" then
+                        state.load_branches_async(function()
+                           if type(state.refresh_ui) == "function" then
+                              state.refresh_ui({ skip_fetch = true })
+                           end
+                        end)
+                     elseif type(state.refresh_ui) == "function" then
                         state.refresh_ui()
                      end
                   else
@@ -498,6 +526,16 @@ function M.attach(buf, state)
                      state.conflicts.handle_merge_result(full_output, exit_code, orig_win)
                   elseif type(state.show_floating_pair) == "function" then
                      state.show_floating_pair(stdout_lines, stderr_lines)
+                  end
+
+                  if type(state.load_branches_async) == "function" then
+                     state.load_branches_async(function()
+                        if type(state.refresh_ui) == "function" then
+                           state.refresh_ui({ skip_fetch = true })
+                        end
+                     end)
+                  elseif type(state.refresh_ui) == "function" then
+                     state.refresh_ui()
                   end
                end)
             end,
