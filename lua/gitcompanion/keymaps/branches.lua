@@ -397,39 +397,45 @@ function M.attach(buf, state)
 
 		vim.cmd("startinsert")
 
-		vim.keymap.set("n", "<CR>", function()
-			local new_branch = vim.api.nvim_get_current_line()
-			vim.api.nvim_win_close(input_win, true)
+		local function confirm_new_branch()
+			local new_branch = vim.trim(vim.api.nvim_get_current_line())
+			if vim.api.nvim_win_is_valid(input_win) then
+				vim.api.nvim_win_close(input_win, true)
+			end
 
 			if new_branch == "" then
 				return
 			end
 
+			local state_mod = require("gitcompanion.state")
+
 			vim.fn.jobstart({ "git", "checkout", "-b", new_branch, current_branch }, {
 				on_exit = function(_, exit_code)
 					vim.schedule(function()
 						if exit_code == 0 then
+							-- Update both internal references so the UI highlights the active branch
 							Ui.branch_selected = new_branch
-							if type(state.load_branches_async) == "function" then
-								state.load_branches_async(function()
+							Ui.current_branch = new_branch
+
+							-- Invalidate cache, fetch fresh git state, sync indices, and redraw layout
+							state_mod.reload_with_fetch(new_branch, function()
+								if type(sync_selected_index) == "function" then
 									sync_selected_index()
-									if type(state.refresh_ui) == "function" then
-										state.refresh_ui({ skip_fetch = true })
-									end
-								end)
-							elseif type(state.refresh_ui) == "function" then
-								sync_selected_index()
-								state.refresh_ui()
-							end
+								end
+							end)
 						else
 							vim.notify("Failed to create branch '" .. new_branch .. "'", vim.log.levels.ERROR)
 						end
 					end)
 				end,
 			})
-		end, { buffer = input_buf, noremap = true, silent = true })
+		end
 
-		vim.keymap.set("n", "q", function()
+		-- Map ENTER for both Insert and Normal modes inside the prompt buffer
+		vim.keymap.set({ "i", "n" }, "<CR>", confirm_new_branch, { buffer = input_buf, noremap = true, silent = true })
+
+		-- Map ESC / q to cancel in both modes
+		vim.keymap.set({ "i", "n" }, "<Esc>", function()
 			if vim.api.nvim_win_is_valid(input_win) then
 				vim.api.nvim_win_close(input_win, true)
 			end
@@ -541,12 +547,12 @@ function M.attach(buf, state)
 		vim.keymap.set("n", "j", function()
 			selected = math.min(#options, selected + 1)
 			render()
-		end, { buffer = buf_win })
+		end, { buffer = buf_win, noremap = true, silent = true })
 
 		vim.keymap.set("n", "k", function()
 			selected = math.max(1, selected - 1)
 			render()
-		end, { buffer = buf_win })
+		end, { buffer = buf_win, noremap = true, silent = true })
 
 		local function close_all()
 			if vim.api.nvim_win_is_valid(win_desc) then
@@ -556,21 +562,18 @@ function M.attach(buf, state)
 				vim.api.nvim_win_close(win, true)
 			end
 			Ui.mode = "branches"
-			if type(state.refresh_ui) == "function" then
-				sync_selected_index()
-				state.refresh_ui()
-			end
 		end
 
 		local function apply_selected()
 			local opt = options[selected]
-			if not opt.cmd then
-				close_all()
+			close_all()
+
+			if not opt or not opt.cmd then
 				return
 			end
 
-			close_all()
 			local stdout_lines, stderr_lines = {}, {}
+			local state_mod = require("gitcompanion.state")
 
 			vim.fn.jobstart(opt.cmd, {
 				stdout_buffered = true,
@@ -604,32 +607,28 @@ function M.attach(buf, state)
 							state.show_floating_pair(stdout_lines, stderr_lines)
 						end
 
-						if type(state.load_branches_async) == "function" then
-							state.load_branches_async(function()
+						-- Trigger full refresh pipeline after merge completes
+						state_mod.reload_with_fetch(current_branch, function()
+							if type(sync_selected_index) == "function" then
 								sync_selected_index()
-								if type(state.refresh_ui) == "function" then
-									state.refresh_ui({ skip_fetch = true })
-								end
-							end)
-						elseif type(state.refresh_ui) == "function" then
-							sync_selected_index()
-							state.refresh_ui()
-						end
+							end
+						end)
 					end)
 				end,
 			})
 		end
 
-		vim.keymap.set("n", "<CR>", apply_selected, { buffer = buf_win })
+		vim.keymap.set("n", "<CR>", apply_selected, { buffer = buf_win, noremap = true, silent = true })
+
 		for idx, opt in ipairs(options) do
 			vim.keymap.set("n", opt.key, function()
 				selected = idx
 				apply_selected()
-			end, { buffer = buf_win })
+			end, { buffer = buf_win, noremap = true, silent = true })
 		end
 
-		vim.keymap.set("n", "q", close_all, { buffer = buf_win })
-		vim.keymap.set("n", "<Esc>", close_all, { buffer = buf_win })
+		vim.keymap.set("n", "q", close_all, { buffer = buf_win, noremap = true, silent = true })
+		vim.keymap.set("n", "<Esc>", close_all, { buffer = buf_win, noremap = true, silent = true })
 	end, "Merge options")
 end
 
