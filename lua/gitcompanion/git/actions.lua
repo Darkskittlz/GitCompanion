@@ -1,7 +1,5 @@
 local M = {}
 
-local State = require("gitcompanion.state")
-
 ---------------------------------------------------------------------------
 -- Internal Dependencies (Injected via setup_dependencies)
 ---------------------------------------------------------------------------
@@ -43,18 +41,31 @@ end
 -- Action Functions
 ---------------------------------------------------------------------------
 
-function M.stage_unstage_selected()
-	local Ui = State.Ui
-	local item = Ui.visible_tree_lines and Ui.visible_tree_lines[Ui.selected_index]
-	local node = item and item.node
-	if not node then
+function M.stage_unstage_selected(state)
+	-- vim.notify("[GitActions] stage_unstage_selected ENTERED", vim.log.levels.DEBUG)
+
+	-- Fallback sequence: passed state -> global State -> state module
+	local State = state or _G.State or require("gitcompanion.state")
+	local Ui = State and State.Ui
+
+	if not Ui then
+		-- vim.notify("[GitActions ERROR] State or State.Ui is nil!", vim.log.levels.ERROR)
 		return
 	end
 
+	local item = Ui.visible_tree_lines and Ui.selected_index and Ui.visible_tree_lines[Ui.selected_index]
+	local node = item and item.node
+	if not node then
+		-- vim.notify(
+		-- 	string.format("[GitActions ERROR] No node found at index: %s", tostring(Ui.selected_index)),
+		-- 	vim.log.levels.ERROR
+		-- )
+		return
+	end
+
+	-- Perform git add / restore logic
 	if node.is_dir then
 		local leaf_nodes = collect_child_files(node)
-
-		-- If any file under directory is unstaged, stage everything. Otherwise unstage all.
 		local should_stage = false
 		for _, child in ipairs(leaf_nodes) do
 			if not child.staged then
@@ -72,7 +83,6 @@ function M.stage_unstage_selected()
 			end
 		end
 	else
-		-- Single file handler
 		node.staged = not node.staged
 		if node.staged then
 			vim.fn.system({ "git", "add", node.path })
@@ -81,8 +91,10 @@ function M.stage_unstage_selected()
 		end
 	end
 
-	if Layout and Layout.refresh_ui then
-		Layout.refresh_ui()
+	-- Refresh UI
+	local layout = require("gitcompanion.ui.layout")
+	if layout and type(layout.render_left) == "function" then
+		layout.render_left(State)
 	end
 end
 
