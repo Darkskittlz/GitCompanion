@@ -14,13 +14,26 @@ local function on_commit_success(state)
 	Ui.flat_nodes = {}
 	Ui._last_rendered_files = nil
 
-	-- 2. Clear commit graph & diff caches so the new commit shows up
+	-- 2. Clear commit graph & diff caches
 	Ui.commit_graph_cache = {}
 	Ui.diff_cache = {}
 
 	-- 3. Refocus mode to "branches"
 	Ui.mode = "branches"
-	Ui.selected_index = 1
+
+	-- Match selected_index to active branch instead of hardcoding to 1
+	local active_branch = Ui.current_branch or Ui.branch_selected
+	if Ui.branches and active_branch then
+		for idx, b in ipairs(Ui.branches) do
+			if b == active_branch then
+				Ui.selected_index = idx
+				Ui.branch_selected = b
+				break
+			end
+		end
+	else
+		Ui.selected_index = 1
+	end
 
 	-- 4. Fetch latest branch commit logs & refresh UI
 	local status = require("gitcompanion.git.status")
@@ -32,7 +45,6 @@ local function on_commit_success(state)
 		load_status()
 	end
 
-	-- Force re-fetch the commit graph for the current selected branch
 	local branch = Ui.branch_selected or Ui.current_branch or "HEAD"
 	local fetch_graph = graph.fetch_git_graph_async or Ui.fetch_git_graph_async
 	if type(fetch_graph) == "function" then
@@ -41,7 +53,18 @@ local function on_commit_success(state)
 
 	local load_branches = status.load_branches_async or state.load_branches_async
 	if type(load_branches) == "function" then
-		load_branches(function()
+		load_branches(function(branches)
+			if branches then
+				Ui.branches = branches
+				-- Re-verify index after async branch reload
+				for idx, b in ipairs(branches) do
+					if b == active_branch then
+						Ui.selected_index = idx
+						Ui.branch_selected = b
+						break
+					end
+				end
+			end
 			if type(state.refresh_ui) == "function" then
 				state.refresh_ui()
 			elseif type(layout.refresh_ui) == "function" then
@@ -56,6 +79,8 @@ local function on_commit_success(state)
 		end
 	end
 end
+
+-- comment
 
 function M.open_commit_modal(state)
 	local Ui = state.Ui or state
