@@ -280,11 +280,10 @@ function M.attach(buf, state)
 
                   if type(state.load_branches_async) == "function" then
                      vim.notify("[Reload] Triggering state.load_branches_async...", vim.log.levels.INFO)
-                     state.load_branches_async(function()
+                     state.load_branches_async({ fetch = true }, function()
                         vim.notify("[Reload Callback] load_branches_async finished.", vim.log.levels.INFO)
                         sync_selected_index()
                         if type(state.refresh_ui) == "function" then
-                           -- NOTE: `skip_fetch = true` might be preventing remote state updates after a push!
                            vim.notify("[UI] Invoking refresh_ui({ skip_fetch = true })", vim.log.levels.WARN)
                            state.refresh_ui({ skip_fetch = true })
                         else
@@ -300,6 +299,9 @@ function M.attach(buf, state)
                         "[Reload Error] Neither load_branches_async nor refresh_ui exist on state!",
                         vim.log.levels.ERROR
                      )
+                     if type(state.show_centered_message) == "function" then
+                        state.show_centered_message("⚠️ Failed to push branch: " .. current_branch)
+                     end
                   end
                end)
             end,
