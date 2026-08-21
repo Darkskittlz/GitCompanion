@@ -74,24 +74,26 @@ function M.attach(buf, state)
 			local out = vim.fn.system(cmd)
 
 			if vim.v.shell_error == 0 then
+				local state_mod = require("gitcompanion.state")
+
+				-- Update internal references
 				if Ui.branch_selected == branch then
 					Ui.branch_selected = new_branch
+				end
+				if Ui.current_branch == branch then
+					Ui.current_branch = new_branch
 				end
 
 				if type(state.show_centered_message) == "function" then
 					state.show_centered_message("Renamed branch: " .. branch .. " ➔ " .. new_branch, "🌿")
 				end
-				if type(state.load_branches_async) == "function" then
-					state.load_branches_async(function()
+
+				-- Direct call: invalidates cache & triggers async fetch/reload pipeline
+				state_mod.reload_with_fetch(new_branch, function()
+					if type(sync_selected_index) == "function" then
 						sync_selected_index()
-						if type(state.refresh_ui) == "function" then
-							state.refresh_ui({ skip_fetch = true })
-						end
-					end)
-				elseif type(state.refresh_ui) == "function" then
-					sync_selected_index()
-					state.refresh_ui()
-				end
+					end
+				end)
 			else
 				vim.notify("Failed to rename branch: " .. out, vim.log.levels.ERROR)
 			end

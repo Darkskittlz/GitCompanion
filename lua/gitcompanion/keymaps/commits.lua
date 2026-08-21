@@ -243,19 +243,13 @@ function M.attach(buf, state)
 				return
 			end
 
+			local success = false
+			local out = ""
+
 			if is_head then
 				local cmd = "git commit --amend -m " .. vim.fn.shellescape(new_msg)
-				local out = vim.fn.system(cmd)
-				if vim.v.shell_error == 0 then
-					if state.show_centered_message then
-						state.show_centered_message("Renamed HEAD commit", "✏️")
-					end
-					if state.refresh_ui then
-						state.refresh_ui()
-					end
-				else
-					vim.notify("Failed to rename HEAD commit: " .. out, vim.log.levels.ERROR)
-				end
+				out = vim.fn.system(cmd)
+				success = (vim.v.shell_error == 0)
 			else
 				local stashed = false
 				local status = vim.fn.system("git status --porcelain -uall"):gsub("%s+$", "")
@@ -286,9 +280,10 @@ function M.attach(buf, state)
 					hash
 				)
 
-				local out = vim.fn.system(git_cmd)
+				out = vim.fn.system(git_cmd)
+				success = (vim.v.shell_error == 0)
 
-				if vim.v.shell_error ~= 0 then
+				if not success then
 					vim.fn.system("git rebase --abort")
 				end
 
@@ -297,17 +292,19 @@ function M.attach(buf, state)
 				end
 
 				os.remove(tmp_msg_file)
+			end
 
-				if vim.v.shell_error == 0 then
-					if state.show_centered_message then
-						state.show_centered_message("Renamed commit " .. hash:sub(1, 7), "✏️")
-					end
-					if state.refresh_ui then
-						state.refresh_ui()
-					end
-				else
-					vim.notify("Failed to reword commit: " .. out, vim.log.levels.ERROR)
+			if success then
+				local state_mod = require("gitcompanion.state")
+
+				if type(state.show_centered_message) == "function" then
+					state.show_centered_message("Renamed commit " .. hash:sub(1, 7), "✏️")
 				end
+
+				-- Direct call: invalidates target branch cache & runs async reload
+				state_mod.reload_with_fetch(Ui.current_branch or Ui.branch_selected)
+			else
+				vim.notify("Failed to reword commit: " .. out, vim.log.levels.ERROR)
 			end
 		end)
 	end, vim.tbl_extend("force", right_opts, { desc = "Rename commit under cursor" }))

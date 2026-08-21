@@ -48,11 +48,35 @@ function M.invalidate_cache(branch_name)
 	end
 end
 
+--- Lazy dispatch to layout.refresh_ui to avoid circular dependencies
+---@param opts table|nil
+function M.refresh_ui(opts)
+	if type(M._registered_refresh_ui) == "function" then
+		M._registered_refresh_ui(opts)
+		return
+	end
+
+	local ok, layout = pcall(require, "gitcompanion.layout")
+	if ok and type(layout.refresh_ui) == "function" then
+		layout.refresh_ui(opts)
+	end
+end
+
+--- Register explicit refresh function dynamically if preferred
+---@param refresh_fn function
+function M.register_refresh_ui(refresh_fn)
+	M._registered_refresh_ui = refresh_fn
+end
+
 --- Proxy load_branches_async lazily to break circular requires
 function M.load_branches_async(opts, cb)
-	local data = require("gitcompanion.git.data")
-	if type(data.load_branches_async) == "function" then
+	local ok, data = pcall(require, "gitcompanion.git.data")
+	if ok and type(data.load_branches_async) == "function" then
 		data.load_branches_async(opts, cb)
+	elseif type(opts) == "function" then
+		opts()
+	elseif type(cb) == "function" then
+		cb()
 	end
 end
 
@@ -60,22 +84,20 @@ end
 ---@param branch_name string|nil
 ---@param cb function|nil
 function M.reload_with_fetch(branch_name, cb)
+	if type(branch_name) == "function" then
+		cb = branch_name
+		branch_name = nil
+	end
+
 	local target_branch = branch_name or M.Ui.branch_selected or M.Ui.current_branch
 	M.invalidate_cache(target_branch)
 
 	M.load_branches_async({ fetch = true }, function()
-		if type(M.refresh_ui) == "function" then
-			M.refresh_ui({ skip_fetch = true })
-		end
+		M.refresh_ui({ skip_fetch = true })
 		if type(cb) == "function" then
 			cb()
 		end
 	end)
-end
-
---- Setter to register your main UI refresh function dynamically
-function M.register_refresh_ui(refresh_fn)
-	M.refresh_ui = refresh_fn
 end
 
 -------------------------------------------------------------------------------

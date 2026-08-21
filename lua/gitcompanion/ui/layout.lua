@@ -1,5 +1,4 @@
 local M = {}
-local state = require("gitcompanion.state")
 local status = require("gitcompanion.git.status")
 local diff = require("gitcompanion.git.diff")
 local graph = require("gitcompanion.git.graph")
@@ -566,6 +565,17 @@ function M.refresh_ui(opts)
 	)
 end
 
+function M.save_active_window()
+	current_win = vim.api.nvim_get_current_win()
+	current_buf = vim.api.nvim_get_current_buf()
+end
+
+function M.restore_active_window()
+	if current_win and vim.api.nvim_win_is_valid(current_win) then
+		pcall(vim.api.nvim_set_current_win, current_win)
+	end
+end
+
 -------------------------------------------------------------------------------
 -- 4. UTILITY & POPUP WINDOW FUNCTIONS
 -------------------------------------------------------------------------------
@@ -669,6 +679,11 @@ function M.close()
 			Ui[win_key] = nil
 		end
 	end
+end
+
+local ok, state = pcall(require, "gitcompanion.state")
+if ok and type(state.register_refresh_ui) == "function" then
+	state.register_refresh_ui(M.refresh_ui)
 end
 
 return M
