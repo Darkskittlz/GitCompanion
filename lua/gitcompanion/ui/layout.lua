@@ -46,17 +46,17 @@ function M.init_ui()
 	end)
 end
 
-local function debug_log(msg, level)
-	level = level or vim.log.levels.DEBUG
-	vim.schedule(function()
-		vim.notify("[GitCompanion UI] " .. msg, level)
-	end)
-end
+-- local function debug_log(msg, level)
+-- 	level = level or vim.log.levels.DEBUG
+-- 	vim.schedule(function()
+-- 		vim.notify("[GitCompanion UI] " .. msg, level)
+-- 	end)
+-- end
 
 function M.update_window_layout()
 	local Ui = get_ui()
 	if not Ui then
-		debug_log("Layout update aborted: 'Ui' table is nil", vim.log.levels.WARN)
+		-- debug_log("Layout update aborted: 'Ui' table is nil", vim.log.levels.WARN)
 		return
 	end
 
@@ -169,14 +169,14 @@ function M.update_window_layout()
 	end
 end
 
-local function log_debug(msg, level)
-	vim.notify("[GitCompanion Debug] " .. msg, level or vim.log.levels.INFO)
-end
+-- local function log_debug(msg, level)
+-- 	vim.notify("[GitCompanion Debug] " .. msg, level or vim.log.levels.INFO)
+-- end
 
 function M.toggle_mode(direction)
 	local Ui = get_ui()
 	if not Ui then
-		log_debug("toggle_mode aborted: Ui context is nil", vim.log.levels.WARN)
+		-- log_debug("toggle_mode aborted: Ui context is nil", vim.log.levels.WARN)
 		return
 	end
 
@@ -200,7 +200,7 @@ function M.toggle_mode(direction)
 	Ui.selected_index = 1
 	Ui.user_navigated = true
 
-	log_debug(string.format("toggle_mode: %s -> %s (dir: %s)", prev_mode or "nil", Ui.mode, direction))
+	-- log_debug(string.format("toggle_mode: %s -> %s (dir: %s)", prev_mode or "nil", Ui.mode, direction))
 
 	M.update_window_layout()
 	M.refresh_ui()
@@ -211,10 +211,10 @@ function M.toggle_mode(direction)
 		vim.api.nvim_set_current_win(active_win)
 		local ok, err = pcall(vim.api.nvim_win_set_cursor, active_win, { 1, 0 })
 		if not ok then
-			log_debug("Failed to set cursor on active_win: " .. tostring(err), vim.log.levels.WARN)
+			-- log_debug("Failed to set cursor on active_win: " .. tostring(err), vim.log.levels.WARN)
 		end
 	else
-		log_debug("active_win is invalid or nil for mode: " .. tostring(Ui.mode), vim.log.levels.WARN)
+		-- log_debug("active_win is invalid or nil for mode: " .. tostring(Ui.mode), vim.log.levels.WARN)
 	end
 
 	-- Trigger diff population for newly focused buffer
@@ -227,11 +227,11 @@ end
 function M.render_left()
 	local Ui = get_ui()
 	if not Ui or not Ui.left_buf or not vim.api.nvim_buf_is_valid(Ui.left_buf) then
-		log_debug("render_left skipped: Ui or left_buf invalid", vim.log.levels.WARN)
+		-- log_debug("render_left skipped: Ui or left_buf invalid", vim.log.levels.WARN)
 		return
 	end
 
-	log_debug("render_left called | Mode: " .. tostring(Ui.mode))
+	-- log_debug("render_left called | Mode: " .. tostring(Ui.mode))
 
 	if Ui.mode == "files" then
 		local ok, tree = pcall(require, "gitcompanion.ui.tree")
@@ -241,17 +241,17 @@ function M.render_left()
 
 		if ok and type(tree) == "table" and type(tree.render_files_tree) == "function" then
 			local tree_ok, err = pcall(tree.render_files_tree)
-			if not tree_ok then
-				log_debug("Error in render_files_tree: " .. tostring(err), vim.log.levels.ERROR)
-			end
+			-- if not tree_ok then
+			-- log_debug("Error in render_files_tree: " .. tostring(err), vim.log.levels.ERROR)
+			-- end
 
 			local flat_count = Ui.flat_nodes and #Ui.flat_nodes or 0
 			local visible_count = Ui.visible_tree_lines and #Ui.visible_tree_lines or 0
-			log_debug(
-				string.format("render_left [files]: flat_nodes=%d, visible_tree_lines=%d", flat_count, visible_count)
-			)
+			-- log_debug(
+			-- 	string.format("render_left [files]: flat_nodes=%d, visible_tree_lines=%d", flat_count, visible_count)
+			-- )
 		else
-			vim.notify("[GitCompanion UI] Could not load tree module", vim.log.levels.ERROR)
+			-- vim.notify("[GitCompanion UI] Could not load tree module", vim.log.levels.ERROR)
 		end
 
 		M.render_diff()
@@ -269,7 +269,7 @@ function M.render_left()
 			or Ui.branch_selected
 			or "HEAD"
 		local branches = Ui.branches or {}
-		log_debug(string.format("render_left [branches]: total=%d, current=%s", #branches, current))
+		-- log_debug(string.format("render_left [branches]: total=%d, current=%s", #branches, current))
 
 		for i, b in ipairs(branches) do
 			local marker = (b == current) and "*" or " "
@@ -298,7 +298,7 @@ function M.render_left()
 		end
 
 		local stashes = Ui.stashes or {}
-		log_debug(string.format("render_left [stashes]: total=%d", #stashes))
+		-- log_debug(string.format("render_left [stashes]: total=%d", #stashes))
 
 		-- Pass 1: Parse entries and find maximum branch name length
 		local parsed_stashes = {}
@@ -374,11 +374,11 @@ end
 function M.render_right()
 	local Ui = get_ui()
 	if not Ui or not Ui.right_buf or not vim.api.nvim_buf_is_valid(Ui.right_buf) then
-		log_debug("render_right skipped: Ui or right_buf invalid", vim.log.levels.WARN)
+		-- log_debug("render_right skipped: Ui or right_buf invalid", vim.log.levels.WARN)
 		return
 	end
 
-	log_debug("render_right called | Mode: " .. tostring(Ui.mode))
+	-- log_debug("render_right called | Mode: " .. tostring(Ui.mode))
 
 	vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.right_buf })
 	vim.api.nvim_buf_clear_namespace(Ui.right_buf, ns_right, 0, -1)
@@ -387,13 +387,13 @@ function M.render_right()
 	local out = Ui.commit_graph_cache and Ui.commit_graph_cache[branch]
 
 	if not out then
-		log_debug("Commit graph cache miss for branch: " .. branch)
+		-- log_debug("Commit graph cache miss for branch: " .. branch)
 		out = { "[Loading commit graph...]" }
 		local fetch_graph = graph.fetch_git_graph_async or (Ui and Ui.fetch_git_graph_async)
 		if type(fetch_graph) == "function" then
 			fetch_graph(branch)
 		else
-			log_debug("fetch_git_graph_async is not executable", vim.log.levels.WARN)
+			-- log_debug("fetch_git_graph_async is not executable", vim.log.levels.WARN)
 		end
 	elseif #out == 0 then
 		out = { "[No commits]" }
@@ -449,7 +449,7 @@ function M.render_right()
 end
 
 function M.fetch_diff_async(file_path, is_dir)
-	log_debug(string.format("fetch_diff_async: path=%s, is_dir=%s", tostring(file_path), tostring(is_dir)))
+	-- log_debug(string.format("fetch_diff_async: path=%s, is_dir=%s", tostring(file_path), tostring(is_dir)))
 	return diff.fetch_diff_async(file_path, is_dir)
 end
 

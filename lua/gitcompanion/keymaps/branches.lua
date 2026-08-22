@@ -17,17 +17,17 @@ function M.attach(buf, state)
    -- Helper: Sync selected index with branch_selected name
    local function sync_selected_index()
       if not Ui.branches or not Ui.branch_selected then
-         vim.notify("[Debug] sync_selected_index skipped: missing branches or branch_selected", vim.log.levels.WARN)
+         -- vim.notify("[Debug] sync_selected_index skipped: missing branches or branch_selected", vim.log.levels.WARN)
          return
       end
       for idx, b in ipairs(Ui.branches) do
          local clean_b = (b:gsub("^%*%s*", ""):gsub("%s+$", ""))
          if clean_b == Ui.branch_selected then
             Ui.selected_index = idx
-            vim.notify(
-               string.format("[Debug] Synced index to %d for branch '%s'", idx, clean_b),
-               vim.log.levels.INFO
-            )
+            -- vim.notify(
+            --    string.format("[Debug] Synced index to %d for branch '%s'", idx, clean_b),
+            --    vim.log.levels.INFO
+            -- )
             break
          end
       end
@@ -175,14 +175,14 @@ function M.attach(buf, state)
       local current_branch = get_selected_branch() or Ui.branch_selected or "HEAD"
       local remote = "origin"
 
-      vim.notify(
-         string.format(
-            "[Push Init] Target branch: '%s' | Ui.branch_selected: '%s'",
-            current_branch,
-            tostring(Ui.branch_selected)
-         ),
-         vim.log.levels.INFO
-      )
+      -- vim.notify(
+      --    string.format(
+      --       "[Push Init] Target branch: '%s' | Ui.branch_selected: '%s'",
+      --       current_branch,
+      --       tostring(Ui.branch_selected)
+      --    ),
+      --    vim.log.levels.INFO
+      -- )
 
       local spinner_chars = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
       local spinner_idx = 1
@@ -270,16 +270,16 @@ function M.attach(buf, state)
                         Ui.commit_graph_cache[Ui.branch_selected] = nil
                      end
 
-                     vim.notify(
-                        "[Reload] Directly calling data.load_branches_async with fetch...",
-                        vim.log.levels.INFO
-                     )
+                     -- vim.notify(
+                     --    "[Reload] Directly calling data.load_branches_async with fetch...",
+                     --    vim.log.levels.INFO
+                     -- )
 
                      -- Require data directly here to guarantee it exists
                      local data = require("gitcompanion.git.data")
 
                      data.load_branches_async({ fetch = true }, function()
-                        vim.notify("[Reload Callback] load_branches_async finished.", vim.log.levels.INFO)
+                        -- vim.notify("[Reload Callback] load_branches_async finished.", vim.log.levels.INFO)
 
                         if type(sync_selected_index) == "function" then
                            sync_selected_index()
@@ -296,34 +296,34 @@ function M.attach(buf, state)
                   end
 
                   if Ui.commit_graph_cache and Ui.branch_selected then
-                     vim.notify(
-                        "[Cache Clear] Invalidated graph cache for: " .. tostring(Ui.branch_selected),
-                        vim.log.levels.INFO
-                     )
+                     -- vim.notify(
+                     --    "[Cache Clear] Invalidated graph cache for: " .. tostring(Ui.branch_selected),
+                     --    vim.log.levels.INFO
+                     -- )
                      Ui.commit_graph_cache[Ui.branch_selected] = nil
                   end
 
                   if type(state.load_branches_async) == "function" then
-                     vim.notify("[Reload] Triggering state.load_branches_async...", vim.log.levels.INFO)
+                     -- vim.notify("[Reload] Triggering state.load_branches_async...", vim.log.levels.INFO)
                      state.load_branches_async({ fetch = true }, function()
-                        vim.notify("[Reload Callback] load_branches_async finished.", vim.log.levels.INFO)
+                        -- vim.notify("[Reload Callback] load_branches_async finished.", vim.log.levels.INFO)
                         sync_selected_index()
                         if type(state.refresh_ui) == "function" then
-                           vim.notify("[UI] Invoking refresh_ui({ skip_fetch = true })", vim.log.levels.WARN)
+                           -- vim.notify("[UI] Invoking refresh_ui({ skip_fetch = true })", vim.log.levels.WARN)
                            state.refresh_ui({ skip_fetch = true })
                         else
-                           vim.notify("[UI Error] state.refresh_ui is not a function", vim.log.levels.ERROR)
+                           -- vim.notify("[UI Error] state.refresh_ui is not a function", vim.log.levels.ERROR)
                         end
                      end)
                   elseif type(state.refresh_ui) == "function" then
-                     vim.notify("[Reload] Fallback triggering state.refresh_ui()...", vim.log.levels.INFO)
+                     -- vim.notify("[Reload] Fallback triggering state.refresh_ui()...", vim.log.levels.INFO)
                      sync_selected_index()
                      state.refresh_ui()
                   else
-                     vim.notify(
-                        "[Reload Error] Neither load_branches_async nor refresh_ui exist on state!",
-                        vim.log.levels.ERROR
-                     )
+                     -- vim.notify(
+                     --    "[Reload Error] Neither load_branches_async nor refresh_ui exist on state!",
+                     --    vim.log.levels.ERROR
+                     -- )
                      if type(state.show_centered_message) == "function" then
                         state.show_centered_message("⚠️ Failed to push branch: " .. current_branch)
                      end

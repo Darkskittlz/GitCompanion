@@ -1,10 +1,10 @@
 local M = {}
 
-local function debug_log(msg)
-	vim.schedule(function()
-		vim.notify("[GitCompanion Stashes Debug] " .. msg, vim.log.levels.DEBUG)
-	end)
-end
+-- local function debug_log(msg)
+-- 	vim.schedule(function()
+-- 		vim.notify("[GitCompanion Stashes Debug] " .. msg, vim.log.levels.DEBUG)
+-- 	end)
+-- end
 
 function M.attach(buf, state)
 	local state_mod = require("gitcompanion.state")
@@ -14,11 +14,11 @@ function M.attach(buf, state)
 	local left_buf = Ui.left_buf
 
 	if not left_buf or not vim.api.nvim_buf_is_valid(left_buf) then
-		debug_log("Attach skipped: Invalid left_buf (" .. tostring(left_buf) .. ")")
+		-- debug_log("Attach skipped: Invalid left_buf (" .. tostring(left_buf) .. ")")
 		return
 	end
 
-	debug_log("Attaching stash keymaps to left_buf: " .. tostring(left_buf))
+	-- debug_log("Attaching stash keymaps to left_buf: " .. tostring(left_buf))
 	local opts = { buffer = left_buf, noremap = true, silent = true }
 
 	-- Parse stash reference OR fallback to index format "stash@{idx}"

@@ -37,12 +37,12 @@ local init_ui = ui_module.init_ui
 
 local M = {}
 
-local function debug_log(msg, level)
-	level = level or vim.log.levels.INFO
-	vim.schedule(function()
-		vim.notify("[GitCompanion Main] " .. msg, level)
-	end)
-end
+-- local function debug_log(msg, level)
+-- 	level = level or vim.log.levels.INFO
+-- 	vim.schedule(function()
+-- 		vim.notify("[GitCompanion Main] " .. msg, level)
+-- 	end)
+-- end
 
 local function get_ui()
 	local current_state = require("gitcompanion.state")
@@ -71,7 +71,7 @@ local function apply_highlights()
 end
 
 function M.close()
-	debug_log("Closing UI and cleaning up windows/buffers")
+	-- debug_log("Closing UI and cleaning up windows/buffers")
 	local Ui = get_ui()
 	for _, buf_key in ipairs({ "diff_buf", "right_buf", "left_buf", "help_buf" }) do
 		if Ui and Ui[buf_key] and vim.api.nvim_buf_is_valid(Ui[buf_key]) then
@@ -127,12 +127,12 @@ function M.toggle(opts)
 	local Ui = get_ui()
 
 	if Ui and Ui.diff_win and vim.api.nvim_win_is_valid(Ui.diff_win) then
-		debug_log("Toggle triggered: UI open -> closing")
+		-- debug_log("Toggle triggered: UI open -> closing")
 		M.close()
 		return
 	end
 
-	debug_log("Toggle triggered: Opening UI windows")
+	-- debug_log("Toggle triggered: Opening UI windows")
 
 	-- Attach async graph loader to UI state
 	Ui.fetch_git_graph_async = graph.fetch_git_graph_async
@@ -152,7 +152,7 @@ function M.toggle(opts)
 	if not Ui.mode then
 		local changed = vim.fn.systemlist("git status --porcelain -uall")
 		Ui.mode = (#changed > 0) and "files" or "branches"
-		debug_log("Initial mode chosen: " .. tostring(Ui.mode) .. " (changed count: " .. #changed .. ")")
+		-- debug_log("Initial mode chosen: " .. tostring(Ui.mode) .. " (changed count: " .. #changed .. ")")
 	end
 	Ui.selected_index = Ui.selected_index or 1
 
@@ -346,10 +346,10 @@ function M.toggle(opts)
 
 	-- Data Fetching
 	if type(get_changed_files_async) == "function" then
-		debug_log("Fetching changed files asynchronously...")
+		-- debug_log("Fetching changed files asynchronously...")
 		get_changed_files_async(function(files)
 			local current_ui = get_ui()
-			debug_log("Async files callback received. File count: " .. tostring(files and #files or 0))
+			-- debug_log("Async files callback received. File count: " .. tostring(files and #files or 0))
 
 			current_ui.changed_files = files or {}
 
@@ -374,10 +374,10 @@ function M.toggle(opts)
 	end
 
 	if type(load_branches_async) == "function" then
-		debug_log("Fetching branches asynchronously...")
+		-- debug_log("Fetching branches asynchronously...")
 		load_branches_async(function(branches)
 			local current_ui = get_ui()
-			debug_log("Async branches callback received. Branch count: " .. tostring(branches and #branches or 0))
+			-- debug_log("Async branches callback received. Branch count: " .. tostring(branches and #branches or 0))
 			if branches then
 				current_ui.branches = branches
 			end
@@ -386,7 +386,7 @@ function M.toggle(opts)
 			end
 		end)
 	else
-		debug_log("Falling back to synchronous git branch retrieval")
+		-- debug_log("Falling back to synchronous git branch retrieval")
 		get_ui().branches = vim.fn.systemlist("git branch --format='%(refname:short)'")
 		if type(refresh_ui) == "function" then
 			refresh_ui()
@@ -414,7 +414,7 @@ M.setup = function(opts)
 		M.toggle()
 	end, { desc = "Open GitCompanion UI" })
 
-	debug_log("GitCompanion setup complete")
+	-- debug_log("GitCompanion setup complete")
 end
 
 return M

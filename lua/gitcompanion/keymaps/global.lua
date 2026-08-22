@@ -7,15 +7,15 @@ local stashes = require("gitcompanion.keymaps.stashes")
 
 local M = {}
 
-local function debug_log(msg)
-   vim.schedule(function()
-      vim.notify("[GitCompanion Keymaps] " .. msg, vim.log.levels.DEBUG)
-   end)
-end
+-- local function debug_log(msg)
+--    vim.schedule(function()
+--       vim.notify("[GitCompanion Keymaps] " .. msg, vim.log.levels.DEBUG)
+--    end)
+-- end
 
 function M.attach(buf, state)
    if not buf or not vim.api.nvim_buf_is_valid(buf) then
-      debug_log("Failed to attach keymaps: Invalid buffer ID " .. tostring(buf))
+      -- debug_log("Failed to attach keymaps: Invalid buffer ID " .. tostring(buf))
       return
    end
 
@@ -46,7 +46,7 @@ function M.attach(buf, state)
       return
    end
 
-   debug_log("Attaching global keymaps to buffer: " .. tostring(buf))
+   -- debug_log("Attaching global keymaps to buffer: " .. tostring(buf))
    vim.b[buf].gitcompanion_global_keymaps = true
 
    local opts = function(desc)
@@ -55,7 +55,7 @@ function M.attach(buf, state)
 
    -- Global Navigation Keymaps
    vim.keymap.set("n", "q", function()
-      debug_log("Action triggered: Close UI")
+      -- debug_log("Action triggered: Close UI")
       if type(state.close_ui) == "function" then
          state.close_ui()
       end
@@ -83,7 +83,7 @@ function M.attach(buf, state)
    end, opts("Show keybindings help"))
 
    vim.keymap.set("n", "s", function()
-      debug_log("Action triggered: Create Stash (s)")
+      -- debug_log("Action triggered: Create Stash (s)")
       vim.ui.input({ prompt = "Stash Message (leave blank for WIP): " }, function(input)
          if input == nil then
             return
