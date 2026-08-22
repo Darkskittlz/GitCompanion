@@ -245,7 +245,6 @@ function M.render_left()
 				log_debug("Error in render_files_tree: " .. tostring(err), vim.log.levels.ERROR)
 			end
 
-			-- LOG 1: Check if tree rendering synced flat_nodes into state
 			local flat_count = Ui.flat_nodes and #Ui.flat_nodes or 0
 			local visible_count = Ui.visible_tree_lines and #Ui.visible_tree_lines or 0
 			log_debug(
@@ -283,8 +282,27 @@ function M.render_left()
 			end
 		end
 	elseif Ui.mode == "stashes" then
+		-- Check if stashes have never been fetched (nil or empty flag)
+		if not Ui.stashes_loaded then
+			Ui.stashes_loaded = true -- Mark as loading/attempted
+
+			-- 1. Try State Module
+			local ok_state, state_mod = pcall(require, "gitcompanion.state")
+			if ok_state and type(state_mod.load_stashes_async) == "function" then
+				state_mod.load_stashes_async(function(stashes)
+					Ui.stashes = stashes or {}
+					M.render_left()
+				end)
+			else
+				-- 2. Direct Sync Fallback
+				Ui.stashes = vim.fn.systemlist("git stash list") or {}
+				M.render_left()
+			end
+		end
+
 		local stashes = Ui.stashes or {}
 		log_debug(string.format("render_left [stashes]: total=%d", #stashes))
+
 		for i, s in ipairs(stashes) do
 			table.insert(lines, "  " .. s)
 			table.insert(highlights, { line = i, hl = "GitMsg", col = 0, length = -1 })
@@ -292,7 +310,9 @@ function M.render_left()
 	end
 
 	if #lines == 0 then
-		lines = { "  (No items available)" }
+		local placeholder = (Ui.mode == "stashes" and not Ui.stashes) and "  (Loading stashes...)"
+			or "  (No items available)"
+		lines = { placeholder }
 	end
 
 	vim.api.nvim_buf_set_lines(Ui.left_buf, 0, -1, false, lines)
@@ -541,9 +561,9 @@ function M.refresh_ui(opts)
 			end
 
 			if not opts.skip_fetch then
-				local ok, branches_mod = pcall(require, "gitcompanion.branches")
+				local ok_branches, branches_mod = pcall(require, "gitcompanion.branches")
 				if
-					ok
+					ok_branches
 					and branches_mod
 					and Ui.mode == "branches"
 					and type(branches_mod.load_branches_async) == "function"
@@ -556,10 +576,30 @@ function M.refresh_ui(opts)
 					end)
 				end
 
+				if Ui.mode == "stashes" then
+					local ok_stashes, stashes_mod = pcall(require, "gitcompanion.stashes")
+					local stash_fn = (ok_stashes and stashes_mod and stashes_mod.load_stashes_async)
+						or (status and status.get_stashes_async)
+
+					if type(stash_fn) == "function" then
+						stash_fn(function(stashes)
+							if stashes then
+								Ui.stashes = stashes
+								local stash_total = #Ui.stashes
+								Ui.selected_index =
+									math.max(1, math.min(Ui.selected_index or 1, math.max(1, stash_total)))
+							end
+							M.render_left()
+						end)
+					end
+				end
+
 				-- Call status module directly
-				status.get_changed_files_async(function()
-					M.render_left()
-				end)
+				if status and type(status.get_changed_files_async) == "function" then
+					status.get_changed_files_async(function()
+						M.render_left()
+					end)
+				end
 			end
 		end)
 	)
