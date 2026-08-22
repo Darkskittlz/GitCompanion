@@ -1,200 +1,224 @@
--- lua/gitcompanion/keymaps/stashes.lua
 local M = {}
 
 local function debug_log(msg)
-   vim.schedule(function()
-      vim.notify("[GitCompanion Stashes Debug] " .. msg, vim.log.levels.DEBUG)
-   end)
+	vim.schedule(function()
+		vim.notify("[GitCompanion Stashes Debug] " .. msg, vim.log.levels.DEBUG)
+	end)
 end
 
 function M.attach(buf, state)
-   -- Resolve state module directly to guarantee fresh references
-   local state_mod = require("gitcompanion.state")
-   state = vim.tbl_extend("keep", state or {}, state_mod)
+	local state_mod = require("gitcompanion.state")
+	state = vim.tbl_extend("keep", state or {}, state_mod)
 
-   local Ui = state.Ui or state
-   local left_buf = Ui.left_buf
+	local Ui = state.Ui or state
+	local left_buf = Ui.left_buf
 
-   if not left_buf or not vim.api.nvim_buf_is_valid(left_buf) then
-      debug_log("Attach skipped: Invalid left_buf (" .. tostring(left_buf) .. ")")
-      return
-   end
+	if not left_buf or not vim.api.nvim_buf_is_valid(left_buf) then
+		debug_log("Attach skipped: Invalid left_buf (" .. tostring(left_buf) .. ")")
+		return
+	end
 
-   debug_log("Attaching stash keymaps to left_buf: " .. tostring(left_buf))
-   local opts = { buffer = left_buf, noremap = true, silent = true }
+	debug_log("Attaching stash keymaps to left_buf: " .. tostring(left_buf))
+	local opts = { buffer = left_buf, noremap = true, silent = true }
 
-   -- -------------------------------------------------------------------------
-   -- Helper: Get Stash Identifier (e.g., stash@{0})
-   -- -------------------------------------------------------------------------
-   local function get_selected_stash()
-      debug_log(
-         string.format(
-            "get_selected_stash called | Mode: %s | Index: %s",
-            tostring(Ui.mode),
-            tostring(Ui.selected_index)
-         )
-      )
+	-- Parse stash reference OR fallback to index format "stash@{idx}"
+	local function get_selected_stash()
+		if Ui.mode ~= "stashes" then
+			return nil
+		end
 
-      if Ui.mode ~= "stashes" then
-         debug_log("get_selected_stash cancelled: Not in 'stashes' mode")
-         return nil
-      end
+		local idx = Ui.selected_index or 1
+		local stash_line = Ui.stashes and Ui.stashes[idx]
+		if not stash_line or stash_line == "" then
+			return nil
+		end
 
-      local stash_line = Ui.stashes and Ui.stashes[Ui.selected_index]
-      debug_log("Raw stash line at index: " .. tostring(stash_line))
+		local stash_ref = stash_line:match("^(stash@{%d+})")
+		if not stash_ref then
+			stash_ref = string.format("stash@{%d}", idx - 1)
+		end
+		return stash_ref
+	end
 
-      if not stash_line or stash_line == "" then
-         debug_log("No valid stash string found at index " .. tostring(Ui.selected_index))
-         return nil
-      end
+	local function reload_stashes()
+		vim.defer_fn(function()
+			if type(state.clear_cache) == "function" then
+				state.clear_cache()
+			end
+			if type(state.reload_stashes) == "function" then
+				state.reload_stashes(function()
+					if Ui.selected_index > #(Ui.stashes or {}) then
+						Ui.selected_index = math.max(1, #(Ui.stashes or {}))
+					end
+					if type(state.refresh_ui) == "function" then
+						state.refresh_ui()
+					end
+				end)
+			else
+				Ui.stashes = vim.fn.systemlist("git stash list") or {}
+				Ui.stashes_loaded = true
+				if Ui.selected_index > #Ui.stashes then
+					Ui.selected_index = math.max(1, #Ui.stashes)
+				end
+				if type(state.refresh_ui) == "function" then
+					state.refresh_ui()
+				end
+			end
+		end, 50)
+	end
 
-      -- Extract stash reference (e.g., "stash@{0}")
-      local stash_ref = stash_line:match("^(stash@{%d+})")
-      debug_log("Parsed stash reference: " .. tostring(stash_ref))
-      return stash_ref
-   end
+	-- 's' - Interactive Floating Modal Create Stash
+	vim.keymap.set("n", "s", function()
+		local lines = {
+			"  1. Staged changes only (--staged)",
+			"  2. Unstaged changes only (--keep-index)",
+			"  3. All changes",
+		}
 
-   -- -------------------------------------------------------------------------
-   -- Helper: Refresh Stash Data and UI
-   -- -------------------------------------------------------------------------
-   local function reload_stashes()
-      debug_log("Scheduling deferred stash reload in 20ms...")
-      vim.defer_fn(function()
-         debug_log("Deferred stash reload timer fired")
-         if type(state.reload_stashes) == "function" then
-            debug_log("Calling state.reload_stashes()")
-            state.reload_stashes(function()
-               if Ui.selected_index > #(Ui.stashes or {}) then
-                  Ui.selected_index = math.max(1, #(Ui.stashes or {}))
-                  debug_log("Adjusted selected_index to: " .. tostring(Ui.selected_index))
-               end
-            end)
-         else
-            debug_log("Fallback: Executing synchronous git stash list")
-            Ui.stashes = vim.fn.systemlist("git stash list")
-            if Ui.selected_index > #Ui.stashes then
-               Ui.selected_index = math.max(1, #Ui.stashes)
-            end
-            if type(state.refresh_ui) == "function" then
-               debug_log("Calling state.refresh_ui()")
-               state.refresh_ui()
-            end
-         end
-      end, 20)
-   end
+		local buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 
-   -- -------------------------------------------------------------------------
-   -- 'a' - Apply Stash
-   -- -------------------------------------------------------------------------
-   vim.keymap.set("n", "a", function()
-      debug_log("'a' pressed: Attempting Apply Stash")
-      local stash = get_selected_stash()
-      if not stash then
-         vim.notify("[GitCompanion] No stash selected to apply", vim.log.levels.WARN)
-         return
-      end
+		-- Calculate position for centered float modal
+		local width = 46
+		local height = #lines
+		local win_width = vim.api.nvim_get_option("columns")
+		local win_height = vim.api.nvim_get_option("lines")
+		local row = math.floor((win_height - height) / 2)
+		local col = math.floor((win_width - width) / 2)
 
-      local cmd = string.format("git stash apply %s", vim.fn.shellescape(stash))
-      debug_log("Executing cmd: " .. cmd)
-      local out = vim.fn.system(cmd)
-      local err = vim.v.shell_error
+		local win = vim.api.nvim_open_win(buf, true, {
+			relative = "editor",
+			width = width,
+			height = height,
+			row = row,
+			col = col,
+			style = "minimal",
+			border = "rounded",
+			title = " Create Stash ",
+			title_pos = "center",
+		})
 
-      debug_log(string.format("git stash apply output: '%s' | exit_code: %d", vim.trim(out or ""), err))
+		local function close_modal()
+			if vim.api.nvim_win_is_valid(win) then
+				vim.api.nvim_win_close(win, true)
+			end
+		end
 
-      if err == 0 then
-         if state.show_centered_message then
-            state.show_centered_message("Applied " .. stash, "📦")
-         end
-         reload_stashes()
-      else
-         vim.notify("Failed to apply stash: " .. out, vim.log.levels.ERROR)
-      end
-   end, vim.tbl_extend("force", opts, { desc = "Apply selected stash" }))
+		local function execute_stash(stash_type)
+			close_modal()
+			vim.ui.input({ prompt = "Stash message (optional): " }, function(msg)
+				local msg_arg = (msg and #msg > 0) and string.format(" -m %s", vim.fn.shellescape(msg)) or ""
+				local cmd
 
-   -- -------------------------------------------------------------------------
-   -- 'p' - Pop Stash
-   -- -------------------------------------------------------------------------
-   vim.keymap.set("n", "p", function()
-      debug_log("'p' pressed: Attempting Pop Stash")
-      local stash = get_selected_stash()
-      if not stash then
-         vim.notify("[GitCompanion] No stash selected to pop", vim.log.levels.WARN)
-         return
-      end
+				if stash_type == 1 then
+					cmd = "git stash push --staged" .. msg_arg
+				elseif stash_type == 2 then
+					cmd = "git stash push --keep-index" .. msg_arg
+				else
+					cmd = "git stash push" .. msg_arg
+				end
 
-      local cmd = string.format("git stash pop %s", vim.fn.shellescape(stash))
-      debug_log("Executing cmd: " .. cmd)
-      local out = vim.fn.system(cmd)
-      local err = vim.v.shell_error
+				local out = vim.fn.system(cmd)
+				if vim.v.shell_error == 0 then
+					if state.show_centered_message then
+						state.show_centered_message("Stashed changes", "📦")
+					end
+					reload_stashes()
+				else
+					vim.notify("Stash failed: " .. out, vim.log.levels.ERROR)
+				end
+			end)
+		end
 
-      debug_log(string.format("git stash pop output: '%s' | exit_code: %d", vim.trim(out or ""), err))
+		local map_opts = { buffer = buf, noremap = true, silent = true }
 
-      if err == 0 then
-         if state.show_centered_message then
-            state.show_centered_message("Popped " .. stash, "💥")
-         end
-         reload_stashes()
-      else
-         vim.notify("Failed to pop stash: " .. out, vim.log.levels.ERROR)
-      end
-   end, vim.tbl_extend("force", opts, { desc = "Pop selected stash" }))
+		-- Single key triggers
+		vim.keymap.set("n", "1", function()
+			execute_stash(1)
+		end, map_opts)
+		vim.keymap.set("n", "2", function()
+			execute_stash(2)
+		end, map_opts)
+		vim.keymap.set("n", "3", function()
+			execute_stash(3)
+		end, map_opts)
 
-   -- -------------------------------------------------------------------------
-   -- 'd' - Drop Stash
-   -- -------------------------------------------------------------------------
-   vim.keymap.set("n", "d", function()
-      debug_log("'d' pressed: Attempting Drop Stash")
-      local stash = get_selected_stash()
-      if not stash then
-         vim.notify("[GitCompanion] No stash selected to drop", vim.log.levels.WARN)
-         return
-      end
+		-- Cancel triggers
+		vim.keymap.set("n", "q", close_modal, map_opts)
+		vim.keymap.set("n", "<Esc>", close_modal, map_opts)
+	end, vim.tbl_extend("force", opts, { desc = "Create stash menu" }))
 
-      vim.ui.input({
-         prompt = "Type 'yes' to drop " .. stash .. ": ",
-      }, function(confirm)
-         if confirm ~= "yes" then
-            debug_log("Drop stash cancelled by user")
-            return
-         end
+	-- 'a' - Apply Stash
+	vim.keymap.set("n", "a", function()
+		local stash = get_selected_stash()
+		if not stash then
+			return
+		end
 
-         local cmd = string.format("git stash drop %s", vim.fn.shellescape(stash))
-         debug_log("Executing cmd: " .. cmd)
-         local out = vim.fn.system(cmd)
-         local err = vim.v.shell_error
+		local out = vim.fn.system("git stash apply " .. stash)
+		if vim.v.shell_error == 0 then
+			if state.show_centered_message then
+				state.show_centered_message("Applied " .. stash, "📦")
+			end
+			reload_stashes()
+		else
+			vim.notify("Failed to apply stash: " .. out, vim.log.levels.ERROR)
+		end
+	end, vim.tbl_extend("force", opts, { desc = "Apply selected stash" }))
 
-         debug_log(string.format("git stash drop output: '%s' | exit_code: %d", vim.trim(out or ""), err))
+	-- 'p' - Pop Stash
+	vim.keymap.set("n", "p", function()
+		local stash = get_selected_stash()
+		if not stash then
+			return
+		end
 
-         if err == 0 then
-            if state.show_centered_message then
-               state.show_centered_message("Dropped " .. stash, "🗑️")
-            end
-            reload_stashes()
-         else
-            vim.notify("Failed to drop stash: " .. out, vim.log.levels.ERROR)
-         end
-      end)
-   end, vim.tbl_extend("force", opts, { desc = "Drop selected stash" }))
+		local out = vim.fn.system("git stash pop " .. stash)
+		if vim.v.shell_error == 0 then
+			if state.show_centered_message then
+				state.show_centered_message("Popped " .. stash, "💥")
+			end
+			reload_stashes()
+		else
+			vim.notify("Failed to pop stash: " .. out, vim.log.levels.ERROR)
+		end
+	end, vim.tbl_extend("force", opts, { desc = "Pop selected stash" }))
 
-   -- -------------------------------------------------------------------------
-   -- 'y' - Yank Stash Reference
-   -- -------------------------------------------------------------------------
-   vim.keymap.set("n", "y", function()
-      debug_log("'y' pressed: Attempting Yank Stash")
-      local stash = get_selected_stash()
-      if not stash then
-         vim.notify("[GitCompanion] No stash selected to yank", vim.log.levels.WARN)
-         return
-      end
+	-- 'd' - Drop Stash
+	vim.keymap.set("n", "d", function()
+		local stash = get_selected_stash()
+		if not stash then
+			return
+		end
 
-      vim.fn.setreg('"', stash)
-      vim.fn.setreg("+", stash)
-      debug_log("Yanked stash reference to registers: " .. stash)
+		vim.ui.input({ prompt = "Type 'yes' to drop " .. stash .. ": " }, function(confirm)
+			if confirm ~= "yes" then
+				return
+			end
+			local out = vim.fn.system("git stash drop " .. stash)
+			if vim.v.shell_error == 0 then
+				if state.show_centered_message then
+					state.show_centered_message("Dropped " .. stash, "🗑️")
+				end
+				reload_stashes()
+			else
+				vim.notify("Failed to drop stash: " .. out, vim.log.levels.ERROR)
+			end
+		end)
+	end, vim.tbl_extend("force", opts, { desc = "Drop selected stash" }))
 
-      if state.show_centered_message then
-         state.show_centered_message("Yanked: " .. stash, "📋")
-      end
-   end, vim.tbl_extend("force", opts, { desc = "Yank stash reference" }))
+	-- 'y' - Yank Reference
+	vim.keymap.set("n", "y", function()
+		local stash = get_selected_stash()
+		if not stash then
+			return
+		end
+		vim.fn.setreg('"', stash)
+		vim.fn.setreg("+", stash)
+		if state.show_centered_message then
+			state.show_centered_message("Yanked: " .. stash, "📋")
+		end
+	end, vim.tbl_extend("force", opts, { desc = "Yank stash reference" }))
 end
 
 return M

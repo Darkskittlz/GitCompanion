@@ -304,8 +304,42 @@ function M.render_left()
 		log_debug(string.format("render_left [stashes]: total=%d", #stashes))
 
 		for i, s in ipairs(stashes) do
-			table.insert(lines, "  " .. s)
-			table.insert(highlights, { line = i, hl = "GitMsg", col = 0, length = -1 })
+			local branch, msg = s:match("^stash@{%d+}:%s*On%s+([^:]+):%s*(.*)$")
+			if not branch then
+				msg = s:match("^stash@{%d+}:%s*(.*)$") or s
+				branch = "stash"
+			end
+
+			local prefix = string.format("  %d. ", i)
+			local line_text = prefix .. branch .. ": " .. msg
+			table.insert(lines, line_text)
+
+			local prefix_bytes = #prefix
+			local branch_bytes = #branch
+
+			-- 1. Number ("  1. ")
+			table.insert(highlights, {
+				line = i,
+				hl = "Number",
+				col = 0,
+				length = prefix_bytes,
+			})
+
+			-- 2. Branch ("mergeBranch")
+			table.insert(highlights, {
+				line = i,
+				hl = "Directory",
+				col = prefix_bytes,
+				length = branch_bytes,
+			})
+
+			-- 3. Message (": stash test")
+			table.insert(highlights, {
+				line = i,
+				hl = "String",
+				col = prefix_bytes + branch_bytes,
+				length = -1,
+			})
 		end
 	end
 
@@ -488,9 +522,13 @@ function M.render_diff()
 
 	-- 3. MODE: Stashes
 	elseif ui.mode == "stashes" then
-		local cursor_line = (ui.left_win and vim.api.nvim_win_is_valid(ui.left_win))
-				and vim.api.nvim_win_get_cursor(ui.left_win)[1]
-			or 1
+		local cursor_line = 1
+		if ui.left_win and vim.api.nvim_win_is_valid(ui.left_win) then
+			cursor_line = vim.api.nvim_win_get_cursor(ui.left_win)[1]
+		else
+			cursor_line = ui.selected_index or 1
+		end
+
 		local stash_item = (ui.stashes or {})[cursor_line]
 		local stash_ref = stash_item and stash_item:match("(stash@{%d+})")
 

@@ -62,6 +62,7 @@ end
 function M.invalidate_cache(branch_name)
 	if branch_name and M.Ui.commit_graph_cache then
 		M.Ui.commit_graph_cache[branch_name] = nil
+		M.Ui.diff_cache = {} -- Force diff cache clearance to prevent index-shift stale diffs
 	else
 		M.Ui.commit_graph_cache = {}
 		M.Ui.diff_cache = {}
@@ -143,6 +144,7 @@ end
 --- Re-fetches stashes and status, then updates the UI
 ---@param cb function|nil
 function M.reload_stashes(cb)
+	M.clear_cache() -- Invalidate all stale diff caches before fetching updated stash references
 	M.load_stashes_async(function()
 		-- Also refresh changed files so apply/pop updates the file tree
 		if type(M.reload_files) == "function" then
@@ -155,7 +157,6 @@ function M.reload_stashes(cb)
 		end
 	end)
 end
-
 -------------------------------------------------------------------------------
 -- 3. CACHE & STATE MANAGEMENT HELPERS
 -------------------------------------------------------------------------------
