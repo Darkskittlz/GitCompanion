@@ -282,11 +282,9 @@ function M.render_left()
 			end
 		end
 	elseif Ui.mode == "stashes" then
-		-- Check if stashes have never been fetched (nil or empty flag)
 		if not Ui.stashes_loaded then
-			Ui.stashes_loaded = true -- Mark as loading/attempted
+			Ui.stashes_loaded = true
 
-			-- 1. Try State Module
 			local ok_state, state_mod = pcall(require, "gitcompanion.state")
 			if ok_state and type(state_mod.load_stashes_async) == "function" then
 				state_mod.load_stashes_async(function(stashes)
@@ -294,7 +292,6 @@ function M.render_left()
 					M.render_left()
 				end)
 			else
-				-- 2. Direct Sync Fallback
 				Ui.stashes = vim.fn.systemlist("git stash list") or {}
 				M.render_left()
 			end
@@ -303,42 +300,57 @@ function M.render_left()
 		local stashes = Ui.stashes or {}
 		log_debug(string.format("render_left [stashes]: total=%d", #stashes))
 
-		for i, s in ipairs(stashes) do
+		-- Pass 1: Parse entries and find maximum branch name length
+		local parsed_stashes = {}
+		local max_branch_len = 0
+
+		for _, s in ipairs(stashes) do
 			local branch, msg = s:match("^stash@{%d+}:%s*On%s+([^:]+):%s*(.*)$")
 			if not branch then
 				msg = s:match("^stash@{%d+}:%s*(.*)$") or s
 				branch = "stash"
 			end
+			if #branch > max_branch_len then
+				max_branch_len = #branch
+			end
+			table.insert(parsed_stashes, { branch = branch, msg = msg })
+		end
 
+		-- Pass 2: Build lines with padded branch names
+		for i, item in ipairs(parsed_stashes) do
 			local prefix = string.format("  %d. ", i)
-			local line_text = prefix .. branch .. ": " .. msg
+			-- Pad branch name to match max_branch_len
+			local padded_branch = item.branch .. string.rep(" ", max_branch_len - #item.branch)
+			local separator = " "
+			local line_text = prefix .. padded_branch .. separator .. item.msg
+
 			table.insert(lines, line_text)
 
 			local prefix_bytes = #prefix
-			local branch_bytes = #branch
+			local branch_bytes = #padded_branch
 
-			-- 1. Number ("  1. ")
+			-- 1. Number ("  1. ") -> Gray
 			table.insert(highlights, {
 				line = i,
-				hl = "Number",
+				hl = "GitStashNumber",
 				col = 0,
-				length = prefix_bytes,
+				end_col = prefix_bytes,
 			})
 
-			-- 2. Branch ("mergeBranch")
+			-- 2. Padded Branch ("mergeBranch    ") -> Blue
 			table.insert(highlights, {
 				line = i,
-				hl = "Directory",
+				hl = "GitStashBranch",
 				col = prefix_bytes,
-				length = branch_bytes,
+				end_col = prefix_bytes + branch_bytes,
 			})
 
-			-- 3. Message (": stash test")
+			-- 3. Message (": message text") -> Green
 			table.insert(highlights, {
 				line = i,
-				hl = "String",
+				hl = "GitStashText",
 				col = prefix_bytes + branch_bytes,
-				length = -1,
+				end_col = -1,
 			})
 		end
 	end
@@ -352,7 +364,7 @@ function M.render_left()
 	vim.api.nvim_buf_set_lines(Ui.left_buf, 0, -1, false, lines)
 	vim.api.nvim_buf_clear_namespace(Ui.left_buf, ns_left, 0, -1)
 	for _, h in ipairs(highlights) do
-		vim.api.nvim_buf_add_highlight(Ui.left_buf, ns_left, h.hl, h.line - 1, h.col or 0, h.length or -1)
+		vim.api.nvim_buf_add_highlight(Ui.left_buf, ns_left, h.hl, h.line - 1, h.col or 0, h.end_col or h.length or -1)
 	end
 
 	vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.left_buf })
