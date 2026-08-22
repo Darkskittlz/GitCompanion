@@ -103,6 +103,8 @@ function M.discard_changes_selected()
 	local State = state_mod or _G.State or {}
 	local Ui = State.Ui or {}
 
+	vim.notify("[GitCompanion Debug] discard_changes_selected invoked", vim.log.levels.DEBUG)
+
 	if Ui.mode ~= "files" then
 		vim.notify("[GitCompanion Discard] Cancelled: Mode is " .. tostring(Ui.mode), vim.log.levels.WARN)
 		return
@@ -115,6 +117,14 @@ function M.discard_changes_selected()
 	if Ui.flat_nodes and Ui.selected_index and Ui.flat_nodes[Ui.selected_index] then
 		local node = Ui.flat_nodes[Ui.selected_index]
 		sel_file = node.path or node.value or node.file
+		vim.notify(
+			string.format(
+				"[GitCompanion Debug] Target resolved via flat_nodes[%s]: %s",
+				tostring(Ui.selected_index),
+				tostring(sel_file)
+			),
+			vim.log.levels.DEBUG
+		)
 	end
 
 	-- 2. Fallback to changed_files array
@@ -125,6 +135,14 @@ function M.discard_changes_selected()
 		elseif type(raw) == "string" then
 			sel_file = raw
 		end
+		vim.notify(
+			string.format(
+				"[GitCompanion Debug] Target resolved via changed_files[%s]: %s",
+				tostring(Ui.selected_index),
+				tostring(sel_file)
+			),
+			vim.log.levels.DEBUG
+		)
 	end
 
 	if not sel_file then
@@ -149,21 +167,46 @@ function M.discard_changes_selected()
 	local target_path = root .. "/" .. sel_file
 	local cmd = { "git", "restore", target_path }
 
+	vim.notify("[GitCompanion Debug] Executing cmd: " .. table.concat(cmd, " "), vim.log.levels.DEBUG)
+
 	local result = vim.fn.system(cmd)
 	local err = vim.v.shell_error
 
+	vim.notify(
+		string.format("[GitCompanion Debug] git restore output: '%s' | exit_code: %d", vim.trim(result or ""), err),
+		vim.log.levels.DEBUG
+	)
+
 	if err ~= 0 then
 		vim.notify("Failed to restore " .. sel_file .. ": " .. result, vim.log.levels.ERROR)
+		return
 	else
 		vim.notify("Discarded changes in " .. sel_file, vim.log.levels.INFO)
 	end
 
-	-- Reload UI state asynchronously
-	if type(state_mod.reload_with_fetch) == "function" then
-		state_mod.reload_with_fetch()
-	elseif type(State.refresh_ui) == "function" then
-		State.refresh_ui()
-	end
+	-- Defer state reload by 20ms to allow filesystem and git index to flush
+	vim.notify("[GitCompanion Debug] Scheduling deferred reload in 20ms...", vim.log.levels.DEBUG)
+
+	vim.defer_fn(function()
+		vim.notify("[GitCompanion Debug] Deferred reload timer fired", vim.log.levels.DEBUG)
+
+		if type(state_mod.reload_files) == "function" then
+			vim.notify("[GitCompanion Debug] Calling state_mod.reload_files()", vim.log.levels.DEBUG)
+			state_mod.reload_files()
+		elseif type(state_mod.reload_with_fetch) == "function" then
+			vim.notify(
+				"[GitCompanion Debug] Calling fallback state_mod.reload_with_fetch() & wiping changed_files",
+				vim.log.levels.DEBUG
+			)
+			state_mod.Ui.changed_files = nil
+			state_mod.reload_with_fetch()
+		elseif type(State.refresh_ui) == "function" then
+			vim.notify("[GitCompanion Debug] Calling State.refresh_ui() directly", vim.log.levels.DEBUG)
+			State.refresh_ui()
+		else
+			vim.notify("[GitCompanion Debug] Warning: No refresh method found!", vim.log.levels.WARN)
+		end
+	end, 20)
 end
 
 function M.checkout_branch()

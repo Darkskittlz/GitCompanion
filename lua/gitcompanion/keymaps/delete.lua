@@ -9,6 +9,17 @@ function M.attach(buf, state)
 
 	local state_mod = state or _G.State or {}
 
+	-- Helper to trigger UI refresh reliably
+	local function trigger_refresh()
+		vim.schedule(function()
+			if type(state_mod.reload_with_fetch) == "function" then
+				state_mod.reload_with_fetch()
+			elseif type(state_mod.refresh_ui) == "function" then
+				state_mod.refresh_ui()
+			end
+		end)
+	end
+
 	vim.keymap.set("n", "x", function()
 		vim.schedule(function()
 			vim.notify("[GitCompanion Keymaps] 'x' pressed in buffer: " .. tostring(buf), vim.log.levels.DEBUG)
@@ -30,6 +41,7 @@ function M.attach(buf, state)
 			if active_ui.mode == "files" then
 				if type(git_actions.discard_changes_selected) == "function" then
 					git_actions.discard_changes_selected()
+					trigger_refresh()
 				else
 					vim.notify("[GitCompanion Error] discard_changes_selected not found", vim.log.levels.ERROR)
 				end
@@ -43,17 +55,15 @@ function M.attach(buf, state)
 							state_mod.load_stashes()
 						end
 						active_ui.selected_index = math.max(1, (active_ui.selected_index or 1) - 1)
-						if type(state_mod.refresh_ui) == "function" then
-							state_mod.refresh_ui()
-						end
+						trigger_refresh()
 					end
 				end
 			elseif active_ui.mode == "branches" then
-				-- FIX: Call git_actions.delete_branch directly!
-				if type(git_actions.delete_branch) == "function" then
-					git_actions.delete_branch()
-				elseif type(state_mod.delete_branch) == "function" then
-					state_mod.delete_branch()
+				local delete_fn = git_actions.delete_branch or state_mod.delete_branch
+				if type(delete_fn) == "function" then
+					-- Execute deletion (ensure reload happens after the action completes)
+					delete_fn()
+					trigger_refresh()
 				else
 					vim.notify("[GitCompanion Error] delete_branch function not found", vim.log.levels.ERROR)
 				end
@@ -66,9 +76,7 @@ function M.attach(buf, state)
 			if hash and vim.fn.confirm("Revert commit " .. hash:sub(1, 7) .. "?", "Yes\nNo", 2) == 1 then
 				local out = vim.fn.system("git revert --no-edit " .. vim.fn.shellescape(hash))
 				if vim.v.shell_error == 0 then
-					if type(state_mod.refresh_ui) == "function" then
-						state_mod.refresh_ui()
-					end
+					trigger_refresh()
 				else
 					vim.notify("Failed to revert commit: " .. out, vim.log.levels.ERROR)
 				end
