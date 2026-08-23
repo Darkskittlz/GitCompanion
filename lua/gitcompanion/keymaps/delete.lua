@@ -22,7 +22,7 @@ function M.attach(buf, state)
 
 	vim.keymap.set("n", "x", function()
 		vim.schedule(function()
-			vim.notify("[GitCompanion Keymaps] 'x' pressed in buffer: " .. tostring(buf), vim.log.levels.DEBUG)
+			-- vim.notify("[GitCompanion Keymaps] 'x' pressed in buffer: " .. tostring(buf), vim.log.levels.DEBUG)
 		end)
 
 		local active_ui = state_mod.Ui or _G.Ui or {}
@@ -46,7 +46,7 @@ function M.attach(buf, state)
 					git_actions.discard_changes_selected()
 					trigger_refresh()
 				else
-					vim.notify("[GitCompanion Error] discard_changes_selected not found", vim.log.levels.ERROR)
+					-- vim.notify("[GitCompanion Error] discard_changes_selected not found", vim.log.levels.ERROR)
 				end
 			elseif active_ui.mode == "stashes" then
 				local stash = active_ui.stashes and active_ui.stashes[active_ui.selected_index]
@@ -67,7 +67,7 @@ function M.attach(buf, state)
 					delete_fn()
 					trigger_refresh()
 				else
-					vim.notify("[GitCompanion Error] delete_branch function not found", vim.log.levels.ERROR)
+					-- vim.notify("[GitCompanion Error] delete_branch function not found", vim.log.levels.ERROR)
 				end
 			end
 		elseif is_right_pane then
