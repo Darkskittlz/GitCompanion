@@ -1,8 +1,8 @@
-local M = {}
+-- lua/gitcompanion/git/graph.lua
 
+local M = {}
 local State = require("gitcompanion.state")
 
--- Holds external UI render callbacks to avoid circular dependencies
 local render_right_fn
 
 function M.setup_dependencies(opts)
@@ -10,7 +10,6 @@ function M.setup_dependencies(opts)
 	render_right_fn = opts.render_right
 end
 
--- Convert git --graph lines (ASCII identity)
 function M.convert_graph(line)
 	line = line:gsub("%*%-", "*-")
 	line = line:gsub("|\\", "|\\")
@@ -18,17 +17,21 @@ function M.convert_graph(line)
 	return line
 end
 
+-- Shared format for both sync and async graph fetchers
+local GRAPH_FORMAT = "%h %ad %<(12,trunc)%an %s"
+
 function M.git_graph(limit, branch)
-	limit = limit or 20
+	limit = limit or 40
 	branch = branch or "HEAD"
 	local cmd = string.format(
-		[[git --no-pager log --graph --pretty=format:'%%h %%cd %%an %%s' --date=format:'%%I:%%M%%p' -n %d %s]],
+		[[git --no-pager log --graph --date=format:'%%H:%%M' --pretty=format:'%s' -n %d %s]],
+		GRAPH_FORMAT,
 		limit,
 		branch
 	)
 	local lines = vim.fn.systemlist(cmd)
 	if vim.v.shell_error ~= 0 then
-		return { "Not a git repo or branch does not exist" }
+		return { "[No commits]" }
 	end
 	for i, line in ipairs(lines) do
 		lines[i] = M.convert_graph(line)
@@ -40,16 +43,13 @@ function M.fetch_git_graph_async(branch)
 	local Ui = State.Ui
 	branch = branch or "HEAD"
 
-	-- Fixed column widths: 7-char Hash | 5-char Time | 12-char Author | Message
-	local format = "%h %ad %<(12,trunc)%an %s"
-
 	vim.system({
 		"git",
 		"--no-pager",
 		"log",
 		"--graph",
 		"--date=format:%H:%M",
-		"--pretty=format:" .. format,
+		"--pretty=format:" .. GRAPH_FORMAT,
 		"-n",
 		"40",
 		branch,
