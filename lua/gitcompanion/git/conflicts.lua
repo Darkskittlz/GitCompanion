@@ -284,8 +284,27 @@ function M.open_merge_conflict_resolver(file_path, orig_win)
 
 	local file_lines = vim.fn.readfile(full_path)
 
+	-- Define target scratch buffer name
+	local target_buf_name = full_path .. " [Conflict Resolver]"
+
+	-- Wipe out any existing stale buffer with the exact same name to prevent E95
+	for _, b in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_is_valid(b) then
+			local name = vim.api.nvim_buf_get_name(b)
+			if name == target_buf_name then
+				vim.api.nvim_buf_delete(b, { force = true })
+			end
+		end
+	end
+
+	-- Create new floating scratch buffer
 	local float_bufnr = vim.api.nvim_create_buf(false, true)
-	pcall(vim.api.nvim_buf_set_name, float_bufnr, full_path .. " [Conflict Resolver]")
+
+	-- Safely set buffer name
+	pcall(function()
+		vim.api.nvim_buf_set_name(float_bufnr, target_buf_name)
+	end)
+
 	vim.api.nvim_buf_set_lines(float_bufnr, 0, -1, false, file_lines)
 
 	local initial_conflicts = count_conflict_blocks(file_lines)
