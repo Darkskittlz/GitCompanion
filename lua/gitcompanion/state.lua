@@ -103,10 +103,20 @@ function M.load_commits_async(branch_name, cb)
 	end
 
 	local ok, data = pcall(require, "gitcompanion.git.data")
-	if ok and type(data.load_commits_async) == "function" then
-		data.load_commits_async(branch_name, cb)
-	elseif type(cb) == "function" then
-		cb()
+	if ok and data.load_commits_async then
+		data.load_commits_async(branch_name, function(raw_or_table)
+			local lines = raw_or_table
+			if type(lines) == "string" then
+				lines = vim.split(lines, "\n", { trimempty = true })
+			end
+			if type(cb) == "function" then
+				cb(lines)
+			end
+		end)
+	else
+		if type(cb) == "function" then
+			cb({})
+		end
 	end
 end
 

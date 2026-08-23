@@ -374,33 +374,35 @@ end
 function M.render_right()
 	local Ui = get_ui()
 	if not Ui or not Ui.right_buf or not vim.api.nvim_buf_is_valid(Ui.right_buf) then
-		-- log_debug("render_right skipped: Ui or right_buf invalid", vim.log.levels.WARN)
 		return
 	end
-
-	-- log_debug("render_right called | Mode: " .. tostring(Ui.mode))
 
 	vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.right_buf })
 	vim.api.nvim_buf_clear_namespace(Ui.right_buf, ns_right, 0, -1)
 
 	local branch = Ui.branch_selected or "HEAD"
-	local out = Ui.commit_graph_cache and Ui.commit_graph_cache[branch]
+	local raw_out = Ui.commit_graph_cache and Ui.commit_graph_cache[branch]
 
-	if not out then
-		-- log_debug("Commit graph cache miss for branch: " .. branch)
+	-- 1. Normalize 'out' to a table before doing anything else
+	local out
+	if type(raw_out) == "string" then
+		out = vim.split(raw_out, "\n", { trimempty = true })
+	elseif type(raw_out) == "table" and #raw_out > 0 then
+		out = raw_out
+	elseif not raw_out then
 		out = { "[Loading commit graph...]" }
 		local fetch_graph = graph.fetch_git_graph_async or (Ui and Ui.fetch_git_graph_async)
 		if type(fetch_graph) == "function" then
 			fetch_graph(branch)
-		else
-			-- log_debug("fetch_git_graph_async is not executable", vim.log.levels.WARN)
 		end
-	elseif #out == 0 then
+	else
 		out = { "[No commits]" }
 	end
 
+	-- 2. Safely populate the buffer with the guaranteed table
 	vim.api.nvim_buf_set_lines(Ui.right_buf, 0, -1, false, out)
 
+	-- 3. Highlight line loop
 	Ui.branch_colors = Ui.branch_colors or {}
 	local graph_chars_list = _G.graph_chars or {}
 	local graph_colors = _G.graph_colors or {}
