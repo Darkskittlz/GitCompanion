@@ -74,7 +74,7 @@ function M.update_top_right_counter(winnr)
 
 	vim.api.nvim_win_set_config(winnr, {
 		title = string.format(" Merge Conflict Resolver: %s ", file_name),
-		title_pos = "left",
+		title_pos = "center",
 	})
 
 	-- Set right-aligned winbar 1 line below border
