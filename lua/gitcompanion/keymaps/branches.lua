@@ -661,14 +661,20 @@ function M.attach(buf, state)
                   return
                end
                spinner_idx = spinner_idx % #spinner_chars + 1
-               vim.api.nvim_buf_set_lines(spin_buf, 0, -1, false, {
-                  "🔀 Merging "
-                  .. target_branch
-                  .. " → "
-                  .. current_branch
-                  .. " "
-                  .. spinner_chars[spinner_idx],
-               })
+               vim.api.nvim_buf_set_lines(
+                  spin_buf,
+                  0,
+                  -1,
+                  false,
+                  {
+                     "🔀 Merging "
+                     .. target_branch
+                     .. " → "
+                     .. current_branch
+                     .. " "
+                     .. spinner_chars[spinner_idx],
+                  }
+               )
             end)
          )
 
