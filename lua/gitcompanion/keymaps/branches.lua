@@ -661,14 +661,20 @@ function M.attach(buf, state)
                   return
                end
                spinner_idx = spinner_idx % #spinner_chars + 1
-               vim.api.nvim_buf_set_lines(spin_buf, 0, -1, false, {
-                  "🔀 Merging "
-                  .. target_branch
-                  .. " → "
-                  .. current_branch
-                  .. " "
-                  .. spinner_chars[spinner_idx],
-               })
+               vim.api.nvim_buf_set_lines(
+                  spin_buf,
+                  0,
+                  -1,
+                  false,
+                  {
+                     "🔀 Merging "
+                     .. target_branch
+                     .. " → "
+                     .. current_branch
+                     .. " "
+                     .. spinner_chars[spinner_idx],
+                  }
+               )
             end)
          )
 
@@ -707,6 +713,12 @@ function M.attach(buf, state)
                         state.conflicts.handle_merge_result(full_output, exit_code, orig_win)
                      end
                   else
+                     -- Fill fallback lines if output was empty to force floating pair to display
+                     if #stdout_lines == 0 and #stderr_lines == 0 then
+                        stdout_lines = { "Already up to date." }
+                        stderr_lines = { "Merge completed successfully." }
+                     end
+
                      if type(state.show_floating_pair) == "function" then
                         state.show_floating_pair(stdout_lines, stderr_lines)
                      end
