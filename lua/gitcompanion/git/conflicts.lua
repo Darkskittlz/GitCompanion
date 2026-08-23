@@ -1,7 +1,5 @@
 local M = {}
 
--- comment
-
 -- Enable debug notifications
 M.debug = true
 
