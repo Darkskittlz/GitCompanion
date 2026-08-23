@@ -248,7 +248,7 @@ function M.attach(buf, state)
             table.insert(args, 3, "--force")
          end
 
-         vim.notify("[Push Job] Running: " .. table.concat(args, " "), vim.log.levels.INFO)
+         -- vim.notify("[Push Job] Running: " .. table.concat(args, " "), vim.log.levels.INFO)
 
          vim.fn.jobstart(args, {
             stdout_buffered = true,
