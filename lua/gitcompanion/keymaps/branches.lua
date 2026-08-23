@@ -248,7 +248,7 @@ function M.attach(buf, state)
             table.insert(args, 3, "--force")
          end
 
-         vim.notify("[Push Job] Running: " .. table.concat(args, " "), vim.log.levels.INFO)
+         -- vim.notify("[Push Job] Running: " .. table.concat(args, " "), vim.log.levels.INFO)
 
          vim.fn.jobstart(args, {
             stdout_buffered = true,
@@ -256,10 +256,10 @@ function M.attach(buf, state)
             on_exit = function(_, exit_code, _)
                stop_spinner()
                vim.schedule(function()
-                  vim.notify(
-                     string.format("[Push Exit] Exit Code: %d", exit_code),
-                     exit_code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
-                  )
+                  -- vim.notify(
+                  --    string.format("[Push Exit] Exit Code: %d", exit_code),
+                  --    exit_code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
+                  -- )
 
                   if exit_code == 0 then
                      if type(state.show_centered_message) == "function" then

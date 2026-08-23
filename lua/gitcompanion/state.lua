@@ -17,8 +17,6 @@ M.Ui.selected_index = M.Ui.selected_index or 1
 M.Ui.mode = M.Ui.mode or "branches"
 
 --- Initializes or resets the tree root node
----@param root_name string|nil
----@return table
 function M.init_tree_root(root_name)
 	root_name = root_name or vim.fn.fnamemodify(vim.fn.getcwd(), ":t")
 	M.Ui.tree_root = {
@@ -38,7 +36,6 @@ M.Ui.tree_root = M.Ui.tree_root or M.init_tree_root()
 -------------------------------------------------------------------------------
 ---
 ------ Re-fetches status/changed files and re-builds the tree
----@param cb function|nil
 function M.reload_files(cb)
 	local ok, data = pcall(require, "gitcompanion.git.data")
 	if ok and type(data.load_status_async) == "function" then
@@ -58,7 +55,6 @@ function M.reload_files(cb)
 end
 
 --- Invalidate cache for a specific branch or all caches
----@param branch_name string|nil
 function M.invalidate_cache(branch_name)
 	if branch_name and M.Ui.commit_graph_cache then
 		M.Ui.commit_graph_cache[branch_name] = nil
@@ -70,7 +66,6 @@ function M.invalidate_cache(branch_name)
 end
 
 --- Lazy dispatch to layout.refresh_ui to avoid circular dependencies
----@param opts table|nil
 function M.refresh_ui(opts)
 	if type(M._registered_refresh_ui) == "function" then
 		M._registered_refresh_ui(opts)
@@ -84,7 +79,6 @@ function M.refresh_ui(opts)
 end
 
 --- Register explicit refresh function dynamically if preferred
----@param refresh_fn function
 function M.register_refresh_ui(refresh_fn)
 	M._registered_refresh_ui = refresh_fn
 end
@@ -101,9 +95,32 @@ function M.load_branches_async(opts, cb)
 	end
 end
 
+--- Proxy load_commits_async lazily to break circular requires
+function M.load_commits_async(branch_name, cb)
+	if type(branch_name) == "function" then
+		cb = branch_name
+		branch_name = nil
+	end
+
+	local ok, data = pcall(require, "gitcompanion.git.data")
+	if ok and data.load_commits_async then
+		data.load_commits_async(branch_name, function(raw_or_table)
+			local lines = raw_or_table
+			if type(lines) == "string" then
+				lines = vim.split(lines, "\n", { trimempty = true })
+			end
+			if type(cb) == "function" then
+				cb(lines)
+			end
+		end)
+	else
+		if type(cb) == "function" then
+			cb({})
+		end
+	end
+end
+
 --- Helper for keymaps to trigger a post-action fetch & reload cleanly
----@param branch_name string|nil
----@param cb function|nil
 function M.reload_with_fetch(branch_name, cb)
 	if type(branch_name) == "function" then
 		cb = branch_name
@@ -114,15 +131,18 @@ function M.reload_with_fetch(branch_name, cb)
 	M.invalidate_cache(target_branch)
 
 	M.load_branches_async({ fetch = true }, function()
-		M.refresh_ui({ skip_fetch = true })
-		if type(cb) == "function" then
-			cb()
-		end
+		-- 2. Reload commit history for the updated HEAD/branch
+		M.load_commits_async(target_branch, function()
+			-- 3. Now re-render the UI with fresh commit graph data
+			M.refresh_ui({ skip_fetch = true })
+			if type(cb) == "function" then
+				cb()
+			end
+		end)
 	end)
 end
 
 --- Fetch stashes asynchronously and update state
----@param cb function|nil
 function M.load_stashes_async(cb)
 	local ok, data = pcall(require, "gitcompanion.git.data")
 	if ok and type(data.load_stashes_async) == "function" then
@@ -142,7 +162,6 @@ function M.load_stashes_async(cb)
 end
 
 --- Re-fetches stashes and status, then updates the UI
----@param cb function|nil
 function M.reload_stashes(cb)
 	M.clear_cache() -- Invalidate all stale diff caches before fetching updated stash references
 	M.load_stashes_async(function()
@@ -157,6 +176,7 @@ function M.reload_stashes(cb)
 		end
 	end)
 end
+
 -------------------------------------------------------------------------------
 -- 3. CACHE & STATE MANAGEMENT HELPERS
 -------------------------------------------------------------------------------
@@ -168,7 +188,6 @@ function M.clear_cache()
 end
 
 --- Reset complete UI state back to default
----@param root_name string|nil
 function M.reset_state(root_name)
 	M.clear_cache()
 	M.Ui.current_branch = ""

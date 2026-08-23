@@ -374,38 +374,43 @@ end
 function M.render_right()
 	local Ui = get_ui()
 	if not Ui or not Ui.right_buf or not vim.api.nvim_buf_is_valid(Ui.right_buf) then
-		-- log_debug("render_right skipped: Ui or right_buf invalid", vim.log.levels.WARN)
 		return
 	end
-
-	-- log_debug("render_right called | Mode: " .. tostring(Ui.mode))
 
 	vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.right_buf })
 	vim.api.nvim_buf_clear_namespace(Ui.right_buf, ns_right, 0, -1)
 
 	local branch = Ui.branch_selected or "HEAD"
-	local out = Ui.commit_graph_cache and Ui.commit_graph_cache[branch]
+	local raw_out = Ui.commit_graph_cache and Ui.commit_graph_cache[branch]
 
-	if not out then
-		-- log_debug("Commit graph cache miss for branch: " .. branch)
+	-- Normalize raw_out to a table of string lines
+	local out = {}
+	if type(raw_out) == "string" then
+		out = vim.split(raw_out, "\n", { trimempty = true })
+	elseif type(raw_out) == "table" and #raw_out > 0 then
+		out = raw_out
+	else
 		out = { "[Loading commit graph...]" }
 		local fetch_graph = graph.fetch_git_graph_async or (Ui and Ui.fetch_git_graph_async)
 		if type(fetch_graph) == "function" then
 			fetch_graph(branch)
-		else
-			-- log_debug("fetch_git_graph_async is not executable", vim.log.levels.WARN)
 		end
-	elseif #out == 0 then
+	end
+
+	if #out == 0 then
 		out = { "[No commits]" }
 	end
 
+	-- 1. Write lines directly to buffer
 	vim.api.nvim_buf_set_lines(Ui.right_buf, 0, -1, false, out)
 
+	-- 2. Apply colors and highlights
 	Ui.branch_colors = Ui.branch_colors or {}
-	local graph_chars_list = _G.graph_chars or {}
-	local graph_colors = _G.graph_colors or {}
+	local graph_chars_list = _G.graph_chars or { "*", "|", "/", "\\", "-", " ", "o", "*" }
+	local graph_colors = _G.graph_colors or { "#56b6c2", "#e06c75", "#98c379", "#d19a66", "#c678dd" }
 
 	for i, line in ipairs(out) do
+		-- Highlight git graph symbols (*, |, \, /)
 		for pos = 1, #line do
 			local char = line:sub(pos, pos)
 			if vim.tbl_contains(graph_chars_list, char) then
@@ -418,7 +423,22 @@ function M.render_right()
 			end
 		end
 
-		local hash, date, author, msg = line:match("([0-9a-f]+)%s+([0-9:APM]+)%s+(%S+)%s+(.+)")
+		-- Parse hash, relative date/time, author, and commit message
+		-- Supports pipe-separated or space-separated log strings
+		local hash, date, author, msg
+		if line:find("|") then
+			local parts = vim.split(line, "|", { plain = true })
+			hash = parts[1]:match("([0-9a-f]+)$")
+			author = parts[3]
+			date = parts[4]
+			msg = parts[5]
+		else
+			hash, date, author, msg = line:match("([0-9a-f]+)%s+([0-9:APM%s%w]+ago)%s+(%S+)%s+(.+)")
+			if not hash then
+				hash, date, author, msg = line:match("([0-9a-f]+)%s+([0-9:]+)%s+(%S+)%s+(.+)")
+			end
+		end
+
 		if hash then
 			local s = line:find(hash, 1, true)
 			if s then
