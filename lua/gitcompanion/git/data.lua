@@ -177,7 +177,7 @@ function M.load_commits_async(branch, cb)
 
    if not target_branch or target_branch == "" then
       if type(cb) == "function" then
-         cb("")
+         cb({})
       end
       return
    end
@@ -193,10 +193,13 @@ function M.load_commits_async(branch, cb)
    vim.system(cmd, { text = true }, function(obj)
       vim.schedule(function()
          local raw_output = obj.stdout or ""
-         State.Ui.commit_graph_cache[target_branch] = raw_output
+         -- Split string by line breaks into a table of lines expected by nvim_buf_set_lines
+         local lines = vim.split(raw_output, "\n", { trimempty = true })
+
+         State.Ui.commit_graph_cache[target_branch] = lines
 
          if type(cb) == "function" then
-            cb(raw_output)
+            cb(lines)
          end
       end)
    end)
