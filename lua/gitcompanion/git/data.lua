@@ -1,3 +1,5 @@
+local graph = require("gitcompanion.git.graph")
+
 local M = {}
 
 -- 1. Require shared state
@@ -204,6 +206,63 @@ function M.load_commits_async(branch, cb)
          end
       end)
    end)
+end
+
+--- Asynchronously loads commit history for a branch
+function M.load_commits_async(branch, cb)
+	if type(branch) == "function" then
+		cb = branch
+		branch = nil
+	end
+
+	local State = require("gitcompanion.state")
+	local target_branch = branch or State.Ui.branch_selected or State.Ui.current_branch
+
+	if not target_branch or target_branch == "" then
+		if type(cb) == "function" then
+			cb({})
+		end
+		return
+	end
+
+	local GRAPH_FORMAT = "%h %ad %<(12,trunc)%an %s"
+
+	local cmd = {
+		"git",
+		"--no-pager",
+		"log",
+		"--graph",
+		"--date=format:%H:%M",
+		"--pretty=format:" .. GRAPH_FORMAT,
+		"-n",
+		"40",
+		target_branch,
+	}
+
+	vim.system(cmd, { text = true }, function(obj)
+		vim.schedule(function()
+			local raw_output = (obj.code == 0 and obj.stdout) or ""
+			local lines = vim.split(raw_output, "\n", { trimempty = true })
+
+			-- Use the graph module's conversion helper safely
+			for i, line in ipairs(lines) do
+				if type(graph.convert_graph) == "function" then
+					lines[i] = graph.convert_graph(line)
+				end
+			end
+
+			if #lines == 0 then
+				lines = { "[No commits]" }
+			end
+
+			State.Ui.commit_graph_cache = State.Ui.commit_graph_cache or {}
+			State.Ui.commit_graph_cache[target_branch] = lines
+
+			if type(cb) == "function" then
+				cb(lines)
+			end
+		end)
+	end)
 end
 
 function M.load_stashes()
