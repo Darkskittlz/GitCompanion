@@ -56,7 +56,7 @@ end
 -- UI EXTENSIONS
 --------------------------------------------------------------------------------
 
---- Updates top-right status on the floating window border header
+--- Updates top-right status on the floating window header
 function M.update_top_right_counter(winnr)
 	if not winnr or not vim.api.nvim_win_is_valid(winnr) then
 		return
@@ -70,16 +70,15 @@ function M.update_top_right_counter(winnr)
 
 	local total = M.session_state.total_conflicts
 	local resolved = M.session_state.resolved_conflicts
-	local status_text = string.format(" %d/%d conflicts resolved ", resolved, total)
 
-	-- Multi-chunk title pins the main header to the left and status to the right
 	vim.api.nvim_win_set_config(winnr, {
-		title = {
-			{ " Merge Conflict Resolver: " .. file_name .. " ", "FloatTitle" },
-			{ status_text, "GitPickerTitle" },
-		},
+		title = string.format(" Merge Conflict Resolver: %s ", file_name),
 		title_pos = "left",
 	})
+
+	-- Set right-aligned winbar 1 line below border
+	local status_text = string.format(" %d/%d conflicts resolved ", resolved, total)
+	vim.wo[winnr].winbar = "%=" .. status_text
 end
 
 function M.prompt_proceed_with_merge(cur_win, target_path, orig_win)
@@ -117,7 +116,6 @@ function M.prompt_proceed_with_merge(cur_win, target_path, orig_win)
 
 	vim.api.nvim_set_hl(0, "GitCompanionPromptKey", { fg = "#00d7ff", bold = true })
 
-	-- Updated deprecated buf_add_highlight to extmarks
 	vim.api.nvim_buf_set_extmark(buf, M.conflict_ns, 3, 2, { end_col = 5, hl_group = "GitCompanionPromptKey" })
 	vim.api.nvim_buf_set_extmark(buf, M.conflict_ns, 3, 31, { end_col = 34, hl_group = "GitCompanionPromptKey" })
 
@@ -145,13 +143,11 @@ function M.prompt_proceed_with_merge(cur_win, target_path, orig_win)
 			vim.api.nvim_set_current_win(orig_win)
 		end
 
-		---@diagnostic disable-next-line: undefined-field
 		local ui_obj = _G.Ui or _G["GitCompanionUi"] or (type(Ui) ~= "nil" and Ui or nil)
 		if ui_obj then
 			ui_obj.mode = "branches"
 		end
 
-		---@diagnostic disable-next-line: undefined-field
 		local refresh_fn = _G.refresh_ui
 			or (ui_obj and ui_obj.refresh)
 			or (type(refresh_ui) == "function" and refresh_ui or nil)
@@ -315,6 +311,7 @@ function M.open_merge_conflict_resolver(file_path, orig_win)
 		height = height,
 		col = col,
 		row = row,
+		title = " Merge Conflict Resolver ",
 		style = "minimal",
 		border = "rounded",
 		title_pos = "left",
@@ -492,7 +489,6 @@ function M.prompt_resolve_conflicts(filename, on_choice)
 
 	vim.api.nvim_set_hl(0, "GitCompanionPromptKey", { fg = "#00d7ff", bold = true })
 
-	-- Updated deprecated buf_add_highlight to extmarks
 	vim.api.nvim_buf_set_extmark(buf, M.conflict_ns, 3, 2, { end_col = 5, hl_group = "GitCompanionPromptKey" })
 	vim.api.nvim_buf_set_extmark(buf, M.conflict_ns, 3, 31, { end_col = 34, hl_group = "GitCompanionPromptKey" })
 
@@ -539,9 +535,7 @@ function M.handle_merge_result(cmd_output, exit_code, orig_win)
 			end
 		end
 
-		---@diagnostic disable-next-line: undefined-field
 		if _G.close_floating and type(_G.close_floating) == "function" then
-			---@diagnostic disable-next-line: undefined-field
 			_G.close_floating()
 		end
 
@@ -562,7 +556,6 @@ local refresh_timer = nil
 
 function M.refresh_ui(opts)
 	opts = opts or {}
-	---@diagnostic disable-next-line: undefined-field
 	local Ui = _G.Ui or _G["GitCompanionUi"] or (type(get_ui) == "function" and get_ui() or nil)
 	if not Ui then
 		return
@@ -631,7 +624,6 @@ function M.refresh_ui(opts)
 
 				if Ui.mode == "stashes" then
 					local ok_stashes, stashes_mod = pcall(require, "gitcompanion.stashes")
-					---@diagnostic disable-next-line: undefined-field
 					local status_mod = _G.status or (type(status) ~= "nil" and status or nil)
 					local stash_fn = (ok_stashes and stashes_mod and stashes_mod.load_stashes_async)
 						or (status_mod and status_mod.get_stashes_async)
@@ -651,7 +643,6 @@ function M.refresh_ui(opts)
 					end
 				end
 
-				---@diagnostic disable-next-line: undefined-field
 				local status_mod = _G.status or (type(status) ~= "nil" and status or nil)
 				if status_mod and type(status_mod.get_changed_files_async) == "function" then
 					status_mod.get_changed_files_async(function()
@@ -664,5 +655,51 @@ function M.refresh_ui(opts)
 		end)
 	)
 end
+
+vim.api.nvim_create_user_command("TC", function()
+	local tmp_file = vim.fn.tempname() .. "_test_conflict.txt"
+	local dummy_content = {
+		"local M = {}",
+		"",
+		"-- Section 1: Initial configuration",
+		"local config = require('gitcompanion.config')",
+		"local utils = require('gitcompanion.utils')",
+		"",
+		"function M.setup(opts)",
+		"    config.options = vim.tbl_deep_extend('force', config.options, opts or {})",
+		"<<<<<<< HEAD",
+		"    print('[GitCompanion] Local setup initialized successfully with custom opts!')",
+		"=======",
+		"    print('[GitCompanion] Remote setup initialized with standard defaults!')",
+		">>>>>>> feature-branch",
+		"end",
+		"",
+	}
+
+	-- Append 80 filler lines to test vertical scrolling
+	for i = 1, 80 do
+		table.insert(
+			dummy_content,
+			string.format("function M.filler_block_%02d() return 'filler content line %02d' end", i, i)
+		)
+	end
+
+	table.insert(dummy_content, "")
+	table.insert(dummy_content, "-- Section 2: Secondary conflict block")
+	table.insert(dummy_content, "function M.process_data(data)")
+	table.insert(dummy_content, "<<<<<<< HEAD")
+	table.insert(dummy_content, "    local processed = utils.transform_local(data)")
+	table.insert(dummy_content, "    return vim.tbl_map(string.upper, processed)")
+	table.insert(dummy_content, "=======")
+	table.insert(dummy_content, "    local processed = utils.transform_remote(data)")
+	table.insert(dummy_content, "    return vim.tbl_filter(function(item) return item ~= nil end, processed)")
+	table.insert(dummy_content, ">>>>>>> feature-branch")
+	table.insert(dummy_content, "end")
+	table.insert(dummy_content, "")
+	table.insert(dummy_content, "return M")
+
+	vim.fn.writefile(dummy_content, tmp_file)
+	M.open_merge_conflict_resolver(tmp_file)
+end, {})
 
 return M
