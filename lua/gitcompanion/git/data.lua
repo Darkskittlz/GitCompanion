@@ -187,6 +187,7 @@ function M.load_commits_async(branch, cb)
       "log",
       target_branch,
       "--graph",
+      "--format=%h|%p|%an|%cr|%s",
       "--format=%h|%p|%an|%cr|%sD|%s",
    }
 
