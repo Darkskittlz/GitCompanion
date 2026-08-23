@@ -642,4 +642,6 @@ function M.open_commit_or_checkout_popup()
    vim.api.nvim_set_current_win(win_title)
 end
 
+-- comment
+
 return M
