@@ -227,12 +227,12 @@ function M.toggle(opts)
 			col = col,
 			style = "minimal",
 			border = "rounded",
-			title = " Git Branches ",
+			title = " Branches ",
 			title_pos = "center",
 			zindex = 10,
 		})
 	else
-		local left_title = " Files Changed "
+		local left_title = " Files "
 		if Ui.mode == "stashes" then
 			left_title = " Stashes "
 		elseif Ui.has_conflicts then
@@ -265,7 +265,7 @@ function M.toggle(opts)
 	})
 
 	-- Render Help Footer
-	local left_text = "[H] Branches ↔ Files Changed ↔ Stashes [L]"
+	local left_text = "[H] Branches ↔ Files ↔ Stashes [L]"
 	local right_text = "Press ? For Help"
 	local pad_len = math.max(0, w - vim.fn.strdisplaywidth(left_text) - vim.fn.strdisplaywidth(right_text))
 
