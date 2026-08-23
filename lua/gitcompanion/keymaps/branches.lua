@@ -379,12 +379,13 @@ function M.attach(buf, state)
 	end, "Push selected branch")
 
 	-- 'n' - Create New Branch
+	-- 'n' - Create New Branch
 	map("n", "n", function()
 		if vim.api.nvim_get_current_buf() ~= target_buf then
 			return
 		end
 
-		local current_branch = Ui.branch_selected
+		local current_branch = get_selected_branch() or Ui.branch_selected or "HEAD"
 		if not current_branch or current_branch == "" then
 			vim.notify("No branch selected!", vim.log.levels.ERROR)
 			return
@@ -422,7 +423,10 @@ function M.attach(buf, state)
 		vim.cmd("startinsert")
 
 		local function confirm_new_branch()
-			local new_branch = vim.trim(vim.api.nvim_get_current_line())
+			vim.cmd("stopinsert")
+			local lines = vim.api.nvim_buf_get_lines(input_buf, 0, 1, false)
+			local new_branch = vim.trim(lines[1] or "")
+
 			if vim.api.nvim_win_is_valid(input_win) then
 				vim.api.nvim_win_close(input_win, true)
 			end
@@ -431,35 +435,51 @@ function M.attach(buf, state)
 				return
 			end
 
-			local state_mod = require("gitcompanion.state")
+			local args = { "git", "checkout", "-b", new_branch, current_branch }
 
-			vim.fn.jobstart({ "git", "checkout", "-b", new_branch, current_branch }, {
-				on_exit = function(_, exit_code)
+			vim.fn.jobstart(args, {
+				stdout_buffered = true,
+				stderr_buffered = true,
+				on_exit = function(_, exit_code, _)
 					vim.schedule(function()
 						if exit_code == 0 then
-							-- Update both internal references so the UI highlights the active branch
+							if type(state.show_centered_message) == "function" then
+								state.show_centered_message("✅ Created and checked out branch: " .. new_branch)
+							end
+
 							Ui.branch_selected = new_branch
 							Ui.current_branch = new_branch
 
-							-- Invalidate cache, fetch fresh git state, sync indices, and redraw layout
-							state_mod.reload_with_fetch(new_branch, function()
+							if Ui.commit_graph_cache then
+								Ui.commit_graph_cache[new_branch] = nil
+							end
+
+							local data = require("gitcompanion.git.data")
+							data.load_branches_async({ fetch = true }, function()
 								if type(sync_selected_index) == "function" then
 									sync_selected_index()
 								end
+
+								if type(state.refresh_ui) == "function" then
+									state.refresh_ui({ skip_fetch = true })
+								end
 							end)
 						else
-							vim.notify("Failed to create branch '" .. new_branch .. "'", vim.log.levels.ERROR)
+							if type(state.show_centered_message) == "function" then
+								state.show_centered_message("⚠️ Failed to create branch: " .. new_branch)
+							else
+								vim.notify("Failed to create branch '" .. new_branch .. "'", vim.log.levels.ERROR)
+							end
 						end
 					end)
 				end,
 			})
 		end
 
-		-- Map ENTER for both Insert and Normal modes inside the prompt buffer
 		vim.keymap.set({ "i", "n" }, "<CR>", confirm_new_branch, { buffer = input_buf, noremap = true, silent = true })
 
-		-- Map ESC / q to cancel in both modes
 		vim.keymap.set({ "i", "n" }, "<Esc>", function()
+			vim.cmd("stopinsert")
 			if vim.api.nvim_win_is_valid(input_win) then
 				vim.api.nvim_win_close(input_win, true)
 			end
