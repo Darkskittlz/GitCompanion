@@ -425,7 +425,7 @@ function M.render_right()
       end
 
       -- 2. Extract match byte indices to prevent false-positive finds
-      local h_start, h_end, hash, date, author, msg = line:find("(%x%x%x%x%x%x%x+)%s+(%d%d:%d%d)%s+(%S+)%s+(.+)")
+      local h_start, h_end, hash, date, author, msg = line:find("(%x%x%x%x%x%x%x+)%s+(%d%d/%d%d/%d%d)%s+(%S+)%s+(.+)")
 
       if h_start then
          -- Calculate strict column positions based on regex captures
