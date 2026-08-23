@@ -2,8 +2,6 @@ local graph = require("gitcompanion.git.graph")
 
 local M = {}
 
--- comment
-
 -- 1. Require shared state
 local State = require("gitcompanion.state")
 
