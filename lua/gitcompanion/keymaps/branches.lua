@@ -256,10 +256,10 @@ function M.attach(buf, state)
             on_exit = function(_, exit_code, _)
                stop_spinner()
                vim.schedule(function()
-                  vim.notify(
-                     string.format("[Push Exit] Exit Code: %d", exit_code),
-                     exit_code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
-                  )
+                  -- vim.notify(
+                  --    string.format("[Push Exit] Exit Code: %d", exit_code),
+                  --    exit_code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR
+                  -- )
 
                   if exit_code == 0 then
                      if type(state.show_centered_message) == "function" then
