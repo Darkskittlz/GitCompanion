@@ -1,4 +1,8 @@
+local graph = require("gitcompanion.git.graph")
+
 local M = {}
+
+-- comment
 
 -- 1. Require shared state
 local State = require("gitcompanion.state")
@@ -182,7 +186,6 @@ function M.load_commits_async(branch, cb)
 		return
 	end
 
-	-- Same format string used across graph modules to prevent render breaks
 	local GRAPH_FORMAT = "%h %ad %<(12,trunc)%an %s"
 
 	local cmd = {
@@ -202,9 +205,11 @@ function M.load_commits_async(branch, cb)
 			local raw_output = (obj.code == 0 and obj.stdout) or ""
 			local lines = vim.split(raw_output, "\n", { trimempty = true })
 
-			-- Clean up graph ASCII branches
+			-- Use the graph module's conversion helper safely
 			for i, line in ipairs(lines) do
-				lines[i] = M.convert_graph(line)
+				if type(graph.convert_graph) == "function" then
+					lines[i] = graph.convert_graph(line)
+				end
 			end
 
 			if #lines == 0 then
