@@ -124,50 +124,43 @@ function M.attach(buf, state)
          return
       end
 
-      local cmd = "git pull origin " .. vim.fn.shellescape(branch)
-      local stdout_lines, stderr_lines = {}, {}
-
-      vim.fn.jobstart(cmd, {
-         stdout_buffered = true,
-         stderr_buffered = true,
-         on_stdout = function(_, data)
-            stdout_lines = data or {}
-         end,
-         on_stderr = function(_, data)
-            stderr_lines = data or {}
-         end,
-         on_exit = function(_, exit_code)
-            vim.schedule(function()
-               local stdout_str = table.concat(stdout_lines or {}, "\n")
-               local stderr_str = table.concat(stderr_lines or {}, "\n")
-               local full_output = stdout_str .. "\n" .. stderr_str
-
-               local has_conflict = exit_code ~= 0 and string.find(full_output, "CONFLICT")
-
-               if has_conflict and state.conflicts and state.conflicts.handle_merge_result then
-                  state.conflicts.handle_merge_result(full_output, exit_code)
-               elseif type(state.show_floating_pair) == "function" then
-                  state.show_floating_pair(stdout_lines, stderr_lines)
-               end
-
-               if type(state.load_branches_async) == "function" then
-                  state.load_branches_async(function()
-                     sync_selected_index()
-                     if type(state.refresh_ui) == "function" then
-                        state.refresh_ui({ skip_fetch = true })
-                     end
-                  end)
-               elseif type(state.refresh_ui) == "function" then
-                  sync_selected_index()
-                  state.refresh_ui()
-               end
-            end)
-         end,
-      })
-
       if type(state.show_centered_message) == "function" then
          state.show_centered_message("Pulling latest changes for branch: " .. branch, "⬇️")
       end
+
+      -- Pass command arguments as a list array rather than a formatted string
+      vim.system({ "git", "pull", "origin", branch }, { text = true }, function(obj)
+         vim.schedule(function()
+            local exit_code = obj.code
+            local stdout_str = obj.stdout or ""
+            local stderr_str = obj.stderr or ""
+            local full_output = stdout_str .. "\n" .. stderr_str
+
+            local stdout_lines = vim.split(stdout_str, "\n", { trimempty = true })
+            local stderr_lines = vim.split(stderr_str, "\n", { trimempty = true })
+
+            local has_conflict = exit_code ~= 0 and string.find(full_output, "CONFLICT")
+
+            if has_conflict and state.conflicts and type(state.conflicts.handle_merge_result) == "function" then
+               state.conflicts.handle_merge_result(full_output, exit_code)
+            elseif type(state.show_floating_pair) == "function" then
+               state.show_floating_pair(stdout_lines, stderr_lines)
+            end
+
+            -- Reload branches and update tree views
+            if type(state.load_branches_async) == "function" then
+               state.load_branches_async(function()
+                  sync_selected_index()
+                  if type(state.refresh_ui) == "function" then
+                     state.refresh_ui({ skip_fetch = true })
+                  end
+               end)
+            elseif type(state.refresh_ui) == "function" then
+               sync_selected_index()
+               state.refresh_ui()
+            end
+         end)
+      end)
    end, "Pull latest changes for branch")
 
    -- 'P' - Push Branch
