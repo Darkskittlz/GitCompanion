@@ -63,7 +63,8 @@ function M.update_top_right_counter(winnr)
 	end
 
 	local buf = vim.api.nvim_win_get_buf(winnr)
-	local file_name = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t")
+	local raw_name = vim.api.nvim_buf_get_name(buf)
+	local file_name = vim.fn.fnamemodify(raw_name, ":t"):gsub(" %[%s*Conflict Resolver%s*%]", "")
 	if file_name == "" then
 		file_name = "Resolver"
 	end
@@ -284,7 +285,7 @@ function M.open_merge_conflict_resolver(file_path, orig_win)
 	local file_lines = vim.fn.readfile(full_path)
 
 	local float_bufnr = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(float_bufnr, full_path)
+	pcall(vim.api.nvim_buf_set_name, float_bufnr, full_path .. " [Conflict Resolver]")
 	vim.api.nvim_buf_set_lines(float_bufnr, 0, -1, false, file_lines)
 
 	local initial_conflicts = count_conflict_blocks(file_lines)
