@@ -227,6 +227,25 @@ function M.load_commits_async(branch, cb)
 
 	local GRAPH_FORMAT = "%h %ad %<(12,trunc)%an %s"
 
+--- Asynchronously loads commit history for a branch
+function M.load_commits_async(branch, cb)
+	if type(branch) == "function" then
+		cb = branch
+		branch = nil
+	end
+
+	local State = require("gitcompanion.state")
+	local target_branch = branch or State.Ui.branch_selected or State.Ui.current_branch
+
+	if not target_branch or target_branch == "" then
+		if type(cb) == "function" then
+			cb({})
+		end
+		return
+	end
+
+	local GRAPH_FORMAT = "%h %ad %<(12,trunc)%an %s"
+
 	local cmd = {
 		"git",
 		"--no-pager",
@@ -237,6 +256,80 @@ function M.load_commits_async(branch, cb)
 		"-n",
 		"40",
 		target_branch,
+	}
+
+	vim.system(cmd, { text = true }, function(obj)
+		vim.schedule(function()
+			local raw_output = (obj.code == 0 and obj.stdout) or ""
+			local lines = vim.split(raw_output, "\n", { trimempty = true })
+
+			-- Use the graph module's conversion helper safely
+			for i, line in ipairs(lines) do
+				if type(graph.convert_graph) == "function" then
+					lines[i] = graph.convert_graph(line)
+				end
+			end
+
+			if #lines == 0 then
+				lines = { "[No commits]" }
+			end
+
+			State.Ui.commit_graph_cache = State.Ui.commit_graph_cache or {}
+			State.Ui.commit_graph_cache[target_branch] = lines
+
+			if type(cb) == "function" then
+				cb(lines)
+			end
+		end)
+	end)
+end
+
+function M.load_stashes()
+	local Ui = State.Ui
+	local raw = M.run_git("git stash list --pretty='%gd: %s'") or {}
+	Ui.stashes = vim.tbl_filter(function(s)
+		return s and #s > 0
+	end, raw)
+end
+
+function M.parse_file_status(line)
+	if #line < 4 then
+		return nil
+	end
+
+	local staged_char = line:sub(1, 1)
+	local unstaged_char = line:sub(2, 2)
+	local path_info = line:sub(4):gsub("^%s+", ""):gsub('^"', ""):gsub('"$', "")
+
+	if staged_char == "?" and unstaged_char == "?" then
+		return {
+			status = "?",
+			staged = false,
+			path = path_info,
+			display = path_info,
+		}
+	end
+
+	local is_staged = staged_char ~= " " and staged_char ~= "?"
+	local status_code = is_staged and staged_char or unstaged_char
+
+	if status_code == "R" then
+		local old_path, new_path = path_info:match("^(.-)%s*%->%s*(.+)$")
+		local target_path = new_path or path_info
+		return {
+			status = "R",
+			staged = is_staged,
+			path = target_path,
+			old_path = old_path,
+			display = string.format("%s (renamed from %s)", target_path, old_path or "?"),
+		}
+	end
+
+	return {
+		status = status_code,
+		staged = is_staged,
+		path = path_info,
+		display = path_info,
 	}
 
 	vim.system(cmd, { text = true }, function(obj)
