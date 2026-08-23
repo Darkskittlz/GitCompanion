@@ -618,8 +618,70 @@ function M.attach(buf, state)
             return
          end
 
+         local spinner_chars = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" }
+         local spinner_idx = 1
+
+         local spin_buf = vim.api.nvim_create_buf(false, true)
+         vim.api.nvim_buf_set_lines(
+            spin_buf,
+            0,
+            -1,
+            false,
+            { "Merging " .. target_branch .. " → " .. current_branch .. " " .. spinner_chars[spinner_idx] }
+         )
+
+         local spin_win = vim.api.nvim_open_win(spin_buf, false, {
+            relative = "editor",
+            width = 50,
+            height = 1,
+            row = 3,
+            col = math.floor((ui.width - 50) / 2),
+            style = "minimal",
+            border = "rounded",
+            zindex = 50,
+         })
+
+         local uv = vim.uv or vim.loop
+         local spinner_timer = uv.new_timer()
+
+         local function stop_spinner()
+            if spinner_timer and not spinner_timer:is_closing() then
+               spinner_timer:stop()
+               spinner_timer:close()
+            end
+            if vim.api.nvim_win_is_valid(spin_win) then
+               vim.api.nvim_win_close(spin_win, true)
+            end
+         end
+
+         spinner_timer:start(
+            100,
+            100,
+            vim.schedule_wrap(function()
+               if not vim.api.nvim_win_is_valid(spin_win) then
+                  stop_spinner()
+                  return
+               end
+               spinner_idx = spinner_idx % #spinner_chars + 1
+               vim.api.nvim_buf_set_lines(
+                  spin_buf,
+                  0,
+                  -1,
+                  false,
+                  {
+                     "🔀 Merging "
+                     .. target_branch
+                     .. " → "
+                     .. current_branch
+                     .. " "
+                     .. spinner_chars[spinner_idx],
+                  }
+               )
+            end)
+         )
+
          local stdout_lines, stderr_lines = {}, {}
-         local state_mod = require("gitcompanion.state")
+         local data_mod = require("gitcompanion.git.data")
 
          vim.fn.jobstart(opt.cmd, {
             stdout_buffered = true,
@@ -643,20 +705,32 @@ function M.attach(buf, state)
                end
             end,
             on_exit = function(_, exit_code)
+               stop_spinner()
                vim.schedule(function()
                   local full_output = table.concat(stdout_lines, "\n") .. "\n" .. table.concat(stderr_lines, "\n")
-                  local has_conflict = exit_code ~= 0 and string.find(full_output, "CONFLICT")
+                  local has_conflict = exit_code ~= 0 and string.find(full_output, "CONFLICT") ~= nil
 
-                  if has_conflict and state.conflicts and state.conflicts.handle_merge_result then
-                     state.conflicts.handle_merge_result(full_output, exit_code, orig_win)
-                  elseif type(state.show_floating_pair) == "function" then
-                     state.show_floating_pair(stdout_lines, stderr_lines)
+                  if has_conflict then
+                     if state.conflicts and type(state.conflicts.handle_merge_result) == "function" then
+                        state.conflicts.handle_merge_result(full_output, exit_code, orig_win)
+                     end
+                  else
+                     if type(state.show_floating_pair) == "function" then
+                        state.show_floating_pair(stdout_lines, stderr_lines)
+                     end
                   end
 
-                  -- Trigger full refresh pipeline after merge completes
-                  state_mod.reload_with_fetch(current_branch, function()
+                  if Ui.commit_graph_cache and Ui.branch_selected then
+                     Ui.commit_graph_cache[Ui.branch_selected] = nil
+                  end
+
+                  data_mod.load_branches_async({ fetch = true }, function()
                      if type(sync_selected_index) == "function" then
                         sync_selected_index()
+                     end
+
+                     if type(state.refresh_ui) == "function" then
+                        state.refresh_ui({ skip_fetch = true })
                      end
                   end)
                end)
