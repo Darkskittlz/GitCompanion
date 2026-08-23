@@ -165,20 +165,26 @@ function M.discard_changes_selected()
 	local root = (status_mod and status_mod.git_root and status_mod.git_root()) or "."
 
 	local target_path = root .. "/" .. sel_file
-	local cmd = { "git", "restore", target_path }
 
-	-- vim.notify("[GitCompanion Debug] Executing cmd: " .. table.concat(cmd, " "), vim.log.levels.DEBUG)
+	-- Check if the file is tracked by git or if it's untracked (newly created)
+	local check_tracked_cmd = { "git", "ls-files", "--error-match", sel_file }
+	local is_tracked = vim.fn.system(check_tracked_cmd)
+	local tracked_err = vim.v.shell_error
+
+	local cmd
+	if tracked_err == 0 and vim.trim(is_tracked) ~= "" then
+		-- File is tracked, use git restore
+		cmd = { "git", "restore", target_path }
+	else
+		-- File is untracked (new file), delete it from filesystem or use git clean
+		cmd = { "rm", target_path }
+	end
 
 	local result = vim.fn.system(cmd)
 	local err = vim.v.shell_error
 
-	-- vim.notify(
-	-- 	string.format("[GitCompanion Debug] git restore output: '%s' | exit_code: %d", vim.trim(result or ""), err),
-	-- 	vim.log.levels.DEBUG
-	-- )
-
 	if err ~= 0 then
-		vim.notify("Failed to restore " .. sel_file .. ": " .. result, vim.log.levels.ERROR)
+		vim.notify("Failed to discard " .. sel_file .. ": " .. result, vim.log.levels.ERROR)
 		return
 	else
 		vim.notify("Discarded changes in " .. sel_file, vim.log.levels.INFO)
@@ -206,7 +212,7 @@ function M.discard_changes_selected()
 		else
 			-- vim.notify("[GitCompanion Debug] Warning: No refresh method found!", vim.log.levels.WARN)
 		end
-	end, 20)
+	end, 150)
 end
 
 function M.checkout_branch()
