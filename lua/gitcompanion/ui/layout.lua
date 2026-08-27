@@ -46,17 +46,9 @@ function M.init_ui()
 	end)
 end
 
--- local function debug_log(msg, level)
--- 	level = level or vim.log.levels.DEBUG
--- 	vim.schedule(function()
--- 		vim.notify("[GitCompanion UI] " .. msg, level)
--- 	end)
--- end
-
 function M.update_window_layout()
 	local Ui = get_ui()
 	if not Ui then
-		-- debug_log("Layout update aborted: 'Ui' table is nil", vim.log.levels.WARN)
 		return
 	end
 
@@ -144,16 +136,18 @@ function M.update_window_layout()
 	end
 
 	-- 3. Navigation / List Window
-	local left_title = " Files "
+	local titles = {
+		files = " Files ",
+		branches = " Branches ",
+		stashes = " Stashes ",
+	}
+	local left_title = titles[Ui.mode] or " Files "
 	local left_h = lower_h
 	local left_row = lower_row
 
 	if Ui.mode == "branches" then
-		left_title = " Branches "
 		left_h = branch_h
 		left_row = branch_row
-	elseif Ui.mode == "stashes" then
-		left_title = " Stashes "
 	end
 
 	if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
@@ -169,14 +163,9 @@ function M.update_window_layout()
 	end
 end
 
--- local function log_debug(msg, level)
--- 	vim.notify("[GitCompanion Debug] " .. msg, level or vim.log.levels.INFO)
--- end
-
 function M.toggle_mode(direction)
 	local Ui = get_ui()
 	if not Ui then
-		-- log_debug("toggle_mode aborted: Ui context is nil", vim.log.levels.WARN)
 		return
 	end
 
@@ -189,7 +178,6 @@ function M.toggle_mode(direction)
 		end
 	end
 
-	local prev_mode = Ui.mode
 	if direction == "next" then
 		current_idx = (current_idx % #modes) + 1
 	elseif direction == "prev" then
@@ -200,8 +188,6 @@ function M.toggle_mode(direction)
 	Ui.selected_index = 1
 	Ui.user_navigated = true
 
-	-- log_debug(string.format("toggle_mode: %s -> %s (dir: %s)", prev_mode or "nil", Ui.mode, direction))
-
 	M.update_window_layout()
 	M.refresh_ui()
 
@@ -209,12 +195,7 @@ function M.toggle_mode(direction)
 	local active_win = (Ui.mode == "branches") and Ui.right_win or Ui.left_win
 	if active_win and vim.api.nvim_win_is_valid(active_win) then
 		vim.api.nvim_set_current_win(active_win)
-		local ok, err = pcall(vim.api.nvim_win_set_cursor, active_win, { 1, 0 })
-		if not ok then
-			-- log_debug("Failed to set cursor on active_win: " .. tostring(err), vim.log.levels.WARN)
-		end
-	else
-		-- log_debug("active_win is invalid or nil for mode: " .. tostring(Ui.mode), vim.log.levels.WARN)
+		pcall(vim.api.nvim_win_set_cursor, active_win, { 1, 0 })
 	end
 
 	-- Trigger diff population for newly focused buffer
@@ -231,8 +212,22 @@ function M.render_left()
 	end
 
 	local buf = Ui.left_buf
+	local ns_left = vim.api.nvim_create_namespace("gitcompanion_left_hl")
 
-	-- 1. Mode: Files (tree rendering module handles its own buffer writes)
+	-- Dynamic window border title based on current mode
+	if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
+		local titles = {
+			files = " Files ",
+			branches = " Branches ",
+			stashes = " Stashes ",
+		}
+		vim.api.nvim_win_set_config(Ui.left_win, {
+			title = titles[Ui.mode] or " Files ",
+			title_pos = "center",
+		})
+	end
+
+	-- 1. Mode: Files (delegates to tree rendering module)
 	if Ui.mode == "files" then
 		local ok, tree = pcall(require, "gitcompanion.ui.tree")
 		if not ok then
@@ -259,9 +254,9 @@ function M.render_left()
 
 		for i, b in ipairs(branches) do
 			local marker = (b == current) and "*" or " "
-			local status = (Ui.branch_statuses and Ui.branch_statuses[b]) or ""
+			local status_text = (Ui.branch_statuses and Ui.branch_statuses[b]) or ""
 			local ahead_behind = (Ui.branch_ahead_behind and Ui.branch_ahead_behind[b]) or ""
-			table.insert(lines, string.format("%2s %s %s %s", marker, b, status, ahead_behind))
+			table.insert(lines, string.format("%2s %s %s %s", marker, b, status_text, ahead_behind))
 
 			if b == current then
 				table.insert(highlights, { line = i, hl = "GitBranchCurrent" })
@@ -339,7 +334,7 @@ function M.render_left()
 		lines = { placeholder }
 	end
 
-	-- Safely toggle modifiable around line 348 writes
+	-- Write content and set highlights safely
 	vim.bo[buf].modifiable = true
 
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
@@ -392,7 +387,6 @@ function M.render_right()
 	local graph_chars_list = _G.graph_chars or { "*", "|", "/", "\\", "-", " ", "o", "*" }
 	local graph_colors = _G.graph_colors or { "#56b6c2", "#e06c75", "#98c379", "#d19a66", "#c678dd" }
 
-	-- Replace the string parsing block inside M.render_right() loop:
 	for i, line in ipairs(out) do
 		-- 1. Highlight git graph symbols (*, |, \, /)
 		for pos = 1, #line do
@@ -408,7 +402,7 @@ function M.render_right()
 		end
 
 		-- 2. Extract match byte indices to prevent false-positive finds
-		local h_start, h_end, hash, date, author, msg = line:find("(%x%x%x%x%x%x%x+)%s+(%d%d/%d%d/%d%d)%s+(%S+)%s+(.+)")
+		local h_start, _, hash, date, author, msg = line:find("(%x%x%x%x%x%x%x+)%s+(%d%d/%d%d/%d%d)%s+(%S+)%s+(.+)")
 
 		if h_start then
 			-- Calculate strict column positions based on regex captures
@@ -451,7 +445,6 @@ function M.render_right()
 end
 
 function M.fetch_diff_async(file_path, is_dir)
-	-- log_debug(string.format("fetch_diff_async: path=%s, is_dir=%s", tostring(file_path), tostring(is_dir)))
 	return diff.fetch_diff_async(file_path, is_dir)
 end
 
@@ -497,7 +490,7 @@ end
 
 function M.render_diff()
 	local State = require("gitcompanion.state")
-	local diff = require("gitcompanion.git.diff") -- Ensure diff module is in scope
+	local diff_mod = require("gitcompanion.git.diff")
 	local ui = State.Ui
 	if not ui or not ui.diff_buf or not vim.api.nvim_buf_is_valid(ui.diff_buf) then
 		return
@@ -519,8 +512,8 @@ function M.render_diff()
 			lines = ui.diff_cache[path]
 		else
 			lines = { "[Loading file diff...]" }
-			if type(diff.fetch_diff_async) == "function" then
-				diff.fetch_diff_async(path, is_dir)
+			if type(diff_mod.fetch_diff_async) == "function" then
+				diff_mod.fetch_diff_async(path, is_dir)
 			end
 		end
 
@@ -534,8 +527,8 @@ function M.render_diff()
 			lines = ui.diff_cache[selected_commit]
 		else
 			lines = { "[Loading commit diff for " .. selected_commit .. "...]" }
-			if type(diff.fetch_commit_diff_async) == "function" then
-				diff.fetch_commit_diff_async(selected_commit)
+			if type(diff_mod.fetch_commit_diff_async) == "function" then
+				diff_mod.fetch_commit_diff_async(selected_commit)
 			end
 		end
 
@@ -560,8 +553,8 @@ function M.render_diff()
 				lines = ui.diff_cache[stash_ref]
 			else
 				lines = { "[Loading stash diff for " .. stash_ref .. "...]" }
-				if type(diff.fetch_stash_diff_async) == "function" then
-					diff.fetch_stash_diff_async(stash_ref)
+				if type(diff_mod.fetch_stash_diff_async) == "function" then
+					diff_mod.fetch_stash_diff_async(stash_ref)
 				else
 					-- Fallback if async loader isn't attached yet
 					local out = vim.fn.systemlist("git stash show -p " .. stash_ref)
