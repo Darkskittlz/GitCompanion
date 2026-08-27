@@ -49,7 +49,7 @@ function M.build_tree_from_files(files)
                if not current.children[part] then
                   current.children[part] = {
                      name = part,
-                     path = current_path, -- FIXED: Populate relative directory path
+                     path = current_path,
                      is_dir = true,
                      children = {},
                      expanded = true,
@@ -67,13 +67,16 @@ function M.flatten_tree(node, depth, result)
    result = result or {}
    depth = depth or 0
 
-   table.insert(result, {
-      node = node,
-      depth = depth,
-      path = node.path,
-      is_dir = node.is_dir,
-      text = M.format_node_text(node, depth),
-   })
+   -- FIX 1: Only insert node text if it isn't the invisible root node
+   if node.name ~= "" then
+      table.insert(result, {
+         node = node,
+         depth = depth,
+         path = node.path,
+         is_dir = node.is_dir,
+         text = M.format_node_text(node, depth - 1),
+      })
+   end
 
    if node.is_dir and node.expanded and node.children then
       local keys = {}
@@ -83,7 +86,7 @@ function M.flatten_tree(node, depth, result)
       table.sort(keys)
 
       for _, k in ipairs(keys) do
-         M.flatten_tree(node.children[k], depth + 1, result) -- FIXED: M.flatten_tree
+         M.flatten_tree(node.children[k], depth + 1, result)
       end
    end
 
@@ -144,10 +147,6 @@ function M.toggle_tree_node()
 end
 
 function M.render_files_tree()
-   -- vim.schedule(function()
-   -- 	vim.notify("[GitCompanion Tree] render_files_tree called", vim.log.levels.DEBUG)
-   -- end)
-
    local State = require("gitcompanion.state")
    local ui = State.Ui
    if not ui or not ui.left_buf or not vim.api.nvim_buf_is_valid(ui.left_buf) then
@@ -159,52 +158,56 @@ function M.render_files_tree()
       ui._last_rendered_files = ui.changed_files
    end
 
+   local buf = ui.left_buf
    local ns = vim.api.nvim_create_namespace("gitcompanion_tree_hl")
 
-   vim.api.nvim_set_option_value("modifiable", true, { buf = ui.left_buf })
-   vim.api.nvim_buf_clear_namespace(ui.left_buf, ns, 0, -1)
+   -- FIX 2: Safely handle modifiable state in a pcall block
+   vim.bo[buf].modifiable = true
 
-   local lines = {}
-   local visible_items = ui.visible_tree_lines or {}
+   local ok, err = pcall(function()
+      vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
 
-   for _, item in ipairs(visible_items) do
-      table.insert(lines, item.text or item.name or "")
-   end
+      local lines = {}
+      local visible_items = ui.visible_tree_lines or {}
 
-   if #lines == 0 then
-      if ui.changed_files and #ui.changed_files > 0 then
-         for _, file in ipairs(ui.changed_files) do
-            local path = type(file) == "table" and (file.path or file[1]) or file
-            table.insert(lines, "  " .. tostring(path))
-         end
-      else
-         lines = { "  (No changed files)" }
+      for _, item in ipairs(visible_items) do
+         table.insert(lines, item.text or item.name or "")
       end
-   end
 
-   vim.api.nvim_buf_set_lines(ui.left_buf, 0, -1, false, lines)
-
-   for line_idx, item in ipairs(visible_items) do
-      local node = item.node
-      if node and not node.is_dir then
-         local hl_group = node.staged and "GitSignsAdd" or "GitSignsChange"
-         if vim.fn.hlexists(hl_group) == 0 then
-            hl_group = node.staged and "Added" or "Changed"
+      if #lines == 0 then
+         if ui.changed_files and #ui.changed_files > 0 then
+            for _, file in ipairs(ui.changed_files) do
+               local path = type(file) == "table" and (file.path or file[1]) or file
+               table.insert(lines, "  " .. tostring(path))
+            end
+         else
+            lines = { "  (No changed files)" }
          end
-         vim.api.nvim_buf_add_highlight(ui.left_buf, ns, hl_group, line_idx - 1, 0, -1)
-      elseif node and node.is_dir then
-         vim.api.nvim_buf_add_highlight(ui.left_buf, ns, "Directory", line_idx - 1, 0, -1)
       end
+
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+
+      for line_idx, item in ipairs(visible_items) do
+         local node = item.node
+         if node and not node.is_dir then
+            local hl_group = node.staged and "GitSignsAdd" or "GitSignsChange"
+            if vim.fn.hlexists(hl_group) == 0 then
+               hl_group = node.staged and "Added" or "Changed"
+            end
+            vim.api.nvim_buf_add_highlight(buf, ns, hl_group, line_idx - 1, 0, -1)
+         elseif node and node.is_dir then
+            vim.api.nvim_buf_add_highlight(buf, ns, "Directory", line_idx - 1, 0, -1)
+         end
+      end
+   end)
+
+   -- Always lock buffer back down
+   vim.bo[buf].modifiable = false
+   vim.bo[buf].modified = false
+
+   if not ok then
+      vim.notify("[GitCompanion Tree Render Error] " .. tostring(err), vim.log.levels.ERROR)
    end
-
-   -- vim.schedule(function()
-   -- 	vim.notify(
-   -- 		string.format("[GitCompanion Tree] Wrote %d lines to buffer %d", #lines, ui.left_buf),
-   -- 		vim.log.levels.DEBUG
-   -- 	)
-   -- end)
-
-   vim.api.nvim_set_option_value("modifiable", false, { buf = ui.left_buf })
 end
 
 return M
