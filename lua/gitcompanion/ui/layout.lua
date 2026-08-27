@@ -49,6 +49,7 @@ end
 function M.update_window_layout()
 	local Ui = get_ui()
 	if not Ui then
+		vim.notify("[gitcompanion] update_window_layout: Ui state nil", vim.log.levels.WARN)
 		return
 	end
 
@@ -73,8 +74,22 @@ function M.update_window_layout()
 	local lower_row = help_row - lower_h - 2
 	local diff_row = 2
 
-	local diff_h = (Ui.mode == "branches") and math.max(log_row - diff_row - 2, 1)
-		or math.max(lower_row - diff_row - 2, 1)
+	-- Direct calculation fix for diff height when lower window is visible
+	local target_lower_row = (Ui.mode == "branches") and log_row or lower_row
+	local diff_h = math.max(target_lower_row - diff_row - 2, 1)
+
+	vim.notify(
+		string.format(
+			"[gitcompanion] layout calc | mode: %s | editor_h: %d | diff_row: %d | diff_h: %d | lower_row: %d | lower_h: %d",
+			tostring(Ui.mode),
+			editor_h,
+			diff_row,
+			diff_h,
+			lower_row,
+			(Ui.mode == "branches" and branch_h or lower_h)
+		),
+		vim.log.levels.DEBUG
+	)
 
 	-- 1. Ensure Top Diff Buffer & Window
 	if not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
@@ -208,11 +223,22 @@ end
 function M.render_left()
 	local Ui = get_ui()
 	if not Ui or not Ui.left_buf or not vim.api.nvim_buf_is_valid(Ui.left_buf) then
+		vim.notify("[gitcompanion] render_left: Invalid buffer or state", vim.log.levels.WARN)
 		return
 	end
 
 	local buf = Ui.left_buf
 	local ns_left = vim.api.nvim_create_namespace("gitcompanion_left_hl")
+
+	-- Debug log for render entry
+	vim.notify(
+		string.format(
+			"[gitcompanion] render_left start | mode: %s | win_valid: %s",
+			tostring(Ui.mode),
+			tostring(Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win))
+		),
+		vim.log.levels.DEBUG
+	)
 
 	-- Dynamic window border title based on current mode
 	if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
@@ -234,8 +260,15 @@ function M.render_left()
 			ok, tree = pcall(require, "gitcompanion.tree")
 		end
 
+		vim.notify(
+			string.format("[gitcompanion] render_left delegating to tree | module_found: %s", tostring(ok)),
+			vim.log.levels.DEBUG
+		)
+
 		if ok and type(tree) == "table" and type(tree.render_files_tree) == "function" then
 			tree.render_files_tree()
+		else
+			vim.notify("[gitcompanion] render_left: Failed to load tree rendering module", vim.log.levels.ERROR)
 		end
 
 		M.render_diff()
@@ -251,6 +284,11 @@ function M.render_left()
 			or Ui.branch_selected
 			or "HEAD"
 		local branches = Ui.branches or {}
+
+		vim.notify(
+			string.format("[gitcompanion] render_left branches count: %d | current: %s", #branches, tostring(current)),
+			vim.log.levels.DEBUG
+		)
 
 		for i, b in ipairs(branches) do
 			local marker = (b == current) and "*" or " "
@@ -281,6 +319,8 @@ function M.render_left()
 		local stashes = Ui.stashes or {}
 		local parsed_stashes = {}
 		local max_branch_len = 0
+
+		vim.notify(string.format("[gitcompanion] render_left stashes count: %d", #stashes), vim.log.levels.DEBUG)
 
 		for _, s in ipairs(stashes) do
 			local branch, msg = s:match("^stash@{%d+}:%s*On%s+([^:]+):%s*(.*)$")
