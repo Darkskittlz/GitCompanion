@@ -5,7 +5,6 @@ local git_diff = require("gitcompanion.git.diff")
 
 -- TODO LIST
 -- TODO: fix stash keymap not auto updating changed files state
--- TODO: new branch logic no longer working
 -- TODO: fix git pipe printout
 
 -- Require keymap submodules
