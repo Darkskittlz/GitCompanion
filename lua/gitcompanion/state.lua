@@ -161,11 +161,19 @@ function M.load_stashes_async(cb)
 	end
 end
 
---- Re-fetches stashes and status, then updates the UI
+--- Re-fetches stashes and status, switches view mode, and updates UI
 function M.reload_stashes(cb)
-	M.clear_cache() -- Invalidate all stale diff caches before fetching updated stash references
-	M.load_stashes_async(function()
-		-- Also refresh changed files so apply/pop updates the file tree
+	M.Ui.mode = "stashes" -- Guarantee mode switches to stashes
+	M.Ui.stashes_loaded = false -- Force layout/render_left to refresh
+	M.clear_cache() -- Invalidate stale diff caches
+
+	M.load_stashes_async(function(stashes)
+		-- Clamp selection index so cursor doesn't exceed new list bounds
+		if M.Ui.selected_index > #(stashes or {}) then
+			M.Ui.selected_index = math.max(1, #(stashes or {}))
+		end
+
+		-- Refresh modified file tree alongside stash view
 		if type(M.reload_files) == "function" then
 			M.reload_files(cb)
 		else
