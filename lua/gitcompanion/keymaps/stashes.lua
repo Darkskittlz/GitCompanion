@@ -100,13 +100,15 @@ function M.attach(buf, state)
 						state.show_centered_message("Stashed changes", "📦")
 					end
 
-					-- Schedule state invalidation after 120ms buffer to allow file lock updates
 					vim.defer_fn(function()
-						debug_log("Triggering async reloads from execute_stash deferred wrapper...")
+						-- Switch active tab mode to stashes explicitly
+						Ui.mode = "stashes"
 						state_mod.reload_stashes(function()
-							debug_log("Reload stashes flow complete.")
+							if type(state_mod.refresh_ui) == "function" then
+								state_mod.refresh_ui()
+							end
 						end)
-					end, 120)
+					end, 100)
 				else
 					vim.notify("Stash failed: " .. out, vim.log.levels.ERROR)
 				end
