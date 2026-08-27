@@ -165,7 +165,13 @@ end
 function M.reload_stashes(cb)
 	M.Ui.mode = "stashes" -- Guarantee mode switches to stashes
 	M.Ui.stashes_loaded = false -- Force layout/render_left to refresh
-	M.clear_cache() -- Invalidate stale diff caches
+
+	-- Invalidate file tree and diff caches explicitly
+	M.Ui.changed_files = nil
+	M.Ui.flat_nodes = nil
+	if type(M.clear_cache) == "function" then
+		M.clear_cache()
+	end
 
 	M.load_stashes_async(function(stashes)
 		-- Clamp selection index so cursor doesn't exceed new list bounds
@@ -173,7 +179,7 @@ function M.reload_stashes(cb)
 			M.Ui.selected_index = math.max(1, #(stashes or {}))
 		end
 
-		-- Refresh modified file tree alongside stash view
+		-- Force a fresh status scan from git to reflect the stashed changes
 		if type(M.reload_files) == "function" then
 			M.reload_files(cb)
 		else

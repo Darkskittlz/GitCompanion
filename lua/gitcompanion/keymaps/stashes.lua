@@ -96,7 +96,11 @@ function M.attach(buf, state)
 					if state.show_centered_message then
 						state.show_centered_message("Stashed changes", "📦")
 					end
-					state_mod.reload_stashes()
+
+					-- Defer to allow git index lock release
+					vim.defer_fn(function()
+						state_mod.reload_stashes()
+					end, 80)
 				else
 					vim.notify("Stash failed: " .. out, vim.log.levels.ERROR)
 				end
@@ -131,7 +135,9 @@ function M.attach(buf, state)
 			if state.show_centered_message then
 				state.show_centered_message("Applied " .. stash, "📦")
 			end
-			state_mod.reload_stashes()
+			vim.defer_fn(function()
+				state_mod.reload_stashes()
+			end, 80)
 		else
 			vim.notify("Failed to apply stash: " .. out, vim.log.levels.ERROR)
 		end
@@ -149,7 +155,9 @@ function M.attach(buf, state)
 			if state.show_centered_message then
 				state.show_centered_message("Popped " .. stash, "💥")
 			end
-			state_mod.reload_stashes()
+			vim.defer_fn(function()
+				state_mod.reload_stashes()
+			end, 80)
 		else
 			vim.notify("Failed to pop stash: " .. out, vim.log.levels.ERROR)
 		end
