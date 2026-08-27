@@ -227,12 +227,15 @@ end
 function M.render_left()
    local Ui = get_ui()
    if not Ui or not Ui.left_buf or not vim.api.nvim_buf_is_valid(Ui.left_buf) then
-      -- log_debug("render_left skipped: Ui or left_buf invalid", vim.log.levels.WARN)
       return
    end
 
-   -- log_debug("render_left called | Mode: " .. tostring(Ui.mode))
+   local buf = Ui.left_buf
 
+   -- Ensure buffer is unlocked during updates
+   vim.bo[buf].modifiable = true
+
+   -- 1. FILES MODE: Delegate rendering to tree module
    if Ui.mode == "files" then
       local ok, tree = pcall(require, "gitcompanion.ui.tree")
       if not ok then
@@ -240,27 +243,16 @@ function M.render_left()
       end
 
       if ok and type(tree) == "table" and type(tree.render_files_tree) == "function" then
-         local tree_ok, err = pcall(tree.render_files_tree)
-         -- if not tree_ok then
-         -- log_debug("Error in render_files_tree: " .. tostring(err), vim.log.levels.ERROR)
-         -- end
-
-         local flat_count = Ui.flat_nodes and #Ui.flat_nodes or 0
-         local visible_count = Ui.visible_tree_lines and #Ui.visible_tree_lines or 0
-         -- log_debug(
-         -- 	string.format("render_left [files]: flat_nodes=%d, visible_tree_lines=%d", flat_count, visible_count)
-         -- )
-      else
-         -- vim.notify("[GitCompanion UI] Could not load tree module", vim.log.levels.ERROR)
+         pcall(tree.render_files_tree)
       end
 
+      vim.bo[buf].modifiable = false
+      vim.bo[buf].modified = false
       M.render_diff()
       return
    end
 
-   -- Branch & Stash modes...
-   vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.left_buf })
-
+   -- 2. BRANCHES & STASHES MODES: Build content & highlights
    local lines = {}
    local highlights = {}
 
@@ -269,7 +261,6 @@ function M.render_left()
           or Ui.branch_selected
           or "HEAD"
       local branches = Ui.branches or {}
-      -- log_debug(string.format("render_left [branches]: total=%d, current=%s", #branches, current))
 
       for i, b in ipairs(branches) do
          local marker = (b == current) and "*" or " "
@@ -298,9 +289,6 @@ function M.render_left()
       end
 
       local stashes = Ui.stashes or {}
-      -- log_debug(string.format("render_left [stashes]: total=%d", #stashes))
-
-      -- Pass 1: Parse entries and find maximum branch name length
       local parsed_stashes = {}
       local max_branch_len = 0
 
@@ -316,10 +304,8 @@ function M.render_left()
          table.insert(parsed_stashes, { branch = branch, msg = msg })
       end
 
-      -- Pass 2: Build lines with padded branch names
       for i, item in ipairs(parsed_stashes) do
          local prefix = string.format("  %d. ", i)
-         -- Pad branch name to match max_branch_len
          local padded_branch = item.branch .. string.rep(" ", max_branch_len - #item.branch)
          local separator = " "
          local line_text = prefix .. padded_branch .. separator .. item.msg
@@ -329,7 +315,6 @@ function M.render_left()
          local prefix_bytes = #prefix
          local branch_bytes = #padded_branch
 
-         -- 1. Number ("  1. ") -> Gray
          table.insert(highlights, {
             line = i,
             hl = "GitStashNumber",
@@ -337,7 +322,6 @@ function M.render_left()
             end_col = prefix_bytes,
          })
 
-         -- 2. Padded Branch ("mergeBranch    ") -> Blue
          table.insert(highlights, {
             line = i,
             hl = "GitStashBranch",
@@ -345,7 +329,6 @@ function M.render_left()
             end_col = prefix_bytes + branch_bytes,
          })
 
-         -- 3. Message (": message text") -> Green
          table.insert(highlights, {
             line = i,
             hl = "GitStashText",
@@ -361,13 +344,17 @@ function M.render_left()
       lines = { placeholder }
    end
 
-   vim.api.nvim_buf_set_lines(Ui.left_buf, 0, -1, false, lines)
-   vim.api.nvim_buf_clear_namespace(Ui.left_buf, ns_left, 0, -1)
+   -- Write lines and set highlights
+   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+   vim.api.nvim_buf_clear_namespace(buf, ns_left, 0, -1)
    for _, h in ipairs(highlights) do
-      vim.api.nvim_buf_add_highlight(Ui.left_buf, ns_left, h.hl, h.line - 1, h.col or 0, h.end_col or h.length or -1)
+      vim.api.nvim_buf_add_highlight(buf, ns_left, h.hl, h.line - 1, h.col or 0, h.end_col or h.length or -1)
    end
 
-   vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.left_buf })
+   -- Lock buffer back down
+   vim.bo[buf].modifiable = false
+   vim.bo[buf].modified = false
+
    M.render_diff()
 end
 
