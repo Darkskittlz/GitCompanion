@@ -379,7 +379,6 @@ function M.attach(buf, state)
 	end, "Push selected branch")
 
 	-- 'n' - Create New Branch
-	-- 'n' - Create New Branch
 	map("n", "n", function()
 		if vim.api.nvim_get_current_buf() ~= target_buf then
 			return
@@ -391,14 +390,10 @@ function M.attach(buf, state)
 			return
 		end
 
+		-- Check for uncommitted working changes
 		local status = vim.fn.systemlist("git status --porcelain")
 		if #status > 0 then
-			if type(state.show_centered_message) == "function" then
-				state.show_centered_message(
-					"🚨 You have uncommitted changes!\nCommit or stash before branching.",
-					"⚠️"
-				)
-			end
+			vim.notify("🚨 You have uncommitted changes! Commit or stash before branching.", vim.log.levels.ERROR)
 			return
 		end
 
@@ -440,11 +435,13 @@ function M.attach(buf, state)
 			vim.fn.jobstart(args, {
 				stdout_buffered = true,
 				stderr_buffered = true,
-				on_exit = function(_, exit_code, _)
+				on_exit = function(_, exit_code, stderr)
 					vim.schedule(function()
 						if exit_code == 0 then
 							if type(state.show_centered_message) == "function" then
 								state.show_centered_message("✅ Created and checked out branch: " .. new_branch)
+							else
+								vim.notify("✅ Created and checked out branch: " .. new_branch, vim.log.levels.INFO)
 							end
 
 							Ui.branch_selected = new_branch
@@ -465,11 +462,9 @@ function M.attach(buf, state)
 								end
 							end)
 						else
-							if type(state.show_centered_message) == "function" then
-								state.show_centered_message("⚠️ Failed to create branch: " .. new_branch)
-							else
-								vim.notify("Failed to create branch '" .. new_branch .. "'", vim.log.levels.ERROR)
-							end
+							local err_msg = stderr and #stderr > 0 and table.concat(stderr, " ")
+								or "Failed to create branch."
+							vim.notify("🚨 " .. err_msg, vim.log.levels.ERROR)
 						end
 					end)
 				end,
