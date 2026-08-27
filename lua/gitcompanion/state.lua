@@ -31,13 +31,21 @@ end
 -- Default initial tree root
 M.Ui.tree_root = M.Ui.tree_root or M.init_tree_root()
 
+local function log_debug(msg)
+   vim.schedule(function()
+      vim.notify("[GitCompanion Debug] " .. msg, vim.log.levels.DEBUG)
+   end)
+end
+
 -------------------------------------------------------------------------------
 -- 2. EXPORTED DATA & REFRESH METHODS
 -------------------------------------------------------------------------------
 ---
 ------ Re-fetches status/changed files and re-builds the tree
 function M.reload_files(cb)
-   -- 1. Explicitly clear all file and tree caches from Ui state
+   log_debug("reload_files START | Clearing state caches...")
+
+   -- 1. Wipe cached UI structures
    M.Ui.changed_files = nil
    M.Ui.flat_nodes = nil
    M.Ui.tree_nodes = nil
@@ -45,30 +53,41 @@ function M.reload_files(cb)
 
    local ok, data = pcall(require, "gitcompanion.git.data")
    if ok and type(data.load_status_async) == "function" then
-      -- Invalidate internal git status cache if present
-      if type(data.clear_cache) == "function" then
-         data.clear_cache()
-      elseif type(data.invalidate) == "function" then
-         data.invalidate()
-      end
+      log_debug("reload_files | Invoking data.load_status_async...")
 
-      data.load_status_async(function()
-         -- 2. Force tree module to rebuild tree from fresh status data
+      data.load_status_async(function(status_res)
+         log_debug(
+            "reload_files | data.load_status_async CB fired. Results count: "
+            .. tostring(status_res and #status_res or "nil")
+         )
+
+         -- 2. Force-rebuild the file tree
          local ok_tree, tree = pcall(require, "gitcompanion.ui.tree")
          if not ok_tree then
             ok_tree, tree = pcall(require, "gitcompanion.tree")
          end
 
          if ok_tree and type(tree) == "table" and type(tree.build_tree) == "function" then
+            log_debug("reload_files | Executing tree.build_tree()...")
             tree.build_tree()
+            log_debug(
+               "reload_files | tree.build_tree() done. Root nodes: "
+               .. tostring(M.Ui.tree_nodes and #M.Ui.tree_nodes or "nil")
+            )
+         else
+            log_debug("reload_files ERROR | Could not find tree.build_tree module!")
          end
 
+         log_debug("reload_files | Refreshing UI layout...")
          M.refresh_ui({ skip_fetch = true })
+
          if type(cb) == "function" then
+            log_debug("reload_files | Invoking completion callback.")
             cb()
          end
       end)
    else
+      log_debug("reload_files WARNING | data.load_status_async unavailable. Fallback to sync refresh.")
       M.refresh_ui()
       if type(cb) == "function" then
          cb()
@@ -185,17 +204,18 @@ end
 
 --- Re-fetches stashes and status, switches view mode, and updates UI
 function M.reload_stashes(cb)
-   M.Ui.stashes_loaded = false -- Force stash re-render
+   log_debug("reload_stashes START")
+   M.Ui.stashes_loaded = false
 
    M.load_stashes_async(function(stashes)
+      log_debug("reload_stashes CB | Loaded stashes count: " .. tostring(stashes and #stashes or 0))
       M.Ui.stashes = stashes or {}
 
-      -- Clamp selection index bounds
       if M.Ui.selected_index > #M.Ui.stashes then
          M.Ui.selected_index = math.max(1, #M.Ui.stashes)
       end
 
-      -- Reload status & rebuild tree state
+      log_debug("reload_stashes | Cascading call to reload_files...")
       M.reload_files(cb)
    end)
 end

@@ -91,17 +91,22 @@ function M.attach(buf, state)
 					cmd = "git stash push" .. msg_arg
 				end
 
+				debug_log("Executing CLI command: " .. cmd)
 				local out = vim.fn.system(cmd)
+				debug_log("CLI Result (code " .. tostring(vim.v.shell_error) .. "): " .. tostring(out))
+
 				if vim.v.shell_error == 0 then
 					if state.show_centered_message then
 						state.show_centered_message("Stashed changes", "📦")
 					end
 
-					-- Wait 100ms for git index lock release, then reload files & stashes
+					-- Schedule state invalidation after 120ms buffer to allow file lock updates
 					vim.defer_fn(function()
-						state_mod.reload_stashes()
-						state_mod.reload_files()
-					end, 100)
+						debug_log("Triggering async reloads from execute_stash deferred wrapper...")
+						state_mod.reload_stashes(function()
+							debug_log("Reload stashes flow complete.")
+						end)
+					end, 120)
 				else
 					vim.notify("Stash failed: " .. out, vim.log.levels.ERROR)
 				end
