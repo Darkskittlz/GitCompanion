@@ -97,10 +97,11 @@ function M.attach(buf, state)
 						state.show_centered_message("Stashed changes", "📦")
 					end
 
-					-- Defer to allow git index lock release
+					-- Wait 100ms for git index lock release, then reload files & stashes
 					vim.defer_fn(function()
 						state_mod.reload_stashes()
-					end, 80)
+						state_mod.reload_files()
+					end, 100)
 				else
 					vim.notify("Stash failed: " .. out, vim.log.levels.ERROR)
 				end
