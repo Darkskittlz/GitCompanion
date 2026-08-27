@@ -497,6 +497,7 @@ end
 
 function M.render_diff()
 	local State = require("gitcompanion.state")
+	local diff = require("gitcompanion.git.diff") -- Ensure diff module is in scope
 	local ui = State.Ui
 	if not ui or not ui.diff_buf or not vim.api.nvim_buf_is_valid(ui.diff_buf) then
 		return
@@ -518,10 +519,12 @@ function M.render_diff()
 			lines = ui.diff_cache[path]
 		else
 			lines = { "[Loading file diff...]" }
-			diff.fetch_diff_async(path, is_dir)
+			if type(diff.fetch_diff_async) == "function" then
+				diff.fetch_diff_async(path, is_dir)
+			end
 		end
 
-	-- 2. MODE: Commits / Branches (Shows diff for commit under cursor in Commit Log)
+	-- 2. MODE: Commits / Branches
 	elseif ui.mode == "commits" or ui.mode == "branches" then
 		local selected_commit = M.get_selected_commit_hash()
 
@@ -531,7 +534,9 @@ function M.render_diff()
 			lines = ui.diff_cache[selected_commit]
 		else
 			lines = { "[Loading commit diff for " .. selected_commit .. "...]" }
-			diff.fetch_commit_diff_async(selected_commit)
+			if type(diff.fetch_commit_diff_async) == "function" then
+				diff.fetch_commit_diff_async(selected_commit)
+			end
 		end
 
 	-- 3. MODE: Stashes
@@ -543,16 +548,27 @@ function M.render_diff()
 			cursor_line = ui.selected_index or 1
 		end
 
-		local stash_item = (ui.stashes or {})[cursor_line]
-		local stash_ref = stash_item and stash_item:match("(stash@{%d+})")
-
-		if not stash_ref then
-			lines = { "No stash selected." }
-		elseif ui.diff_cache[stash_ref] then
-			lines = ui.diff_cache[stash_ref]
+		local stashes = ui.stashes or {}
+		if #stashes == 0 then
+			lines = { "No stashes available." }
 		else
-			lines = { "[Loading stash diff...]" }
-			diff.fetch_stash_diff_async(stash_ref)
+			-- Calculate zero-indexed stash reference from line position
+			local stash_index = math.max(0, cursor_line - 1)
+			local stash_ref = string.format("stash@{%d}", stash_index)
+
+			if ui.diff_cache[stash_ref] then
+				lines = ui.diff_cache[stash_ref]
+			else
+				lines = { "[Loading stash diff for " .. stash_ref .. "...]" }
+				if type(diff.fetch_stash_diff_async) == "function" then
+					diff.fetch_stash_diff_async(stash_ref)
+				else
+					-- Fallback if async loader isn't attached yet
+					local out = vim.fn.systemlist("git stash show -p " .. stash_ref)
+					lines = (#out > 0) and out or { "  (Empty stash diff)" }
+					ui.diff_cache[stash_ref] = lines
+				end
+			end
 		end
 	end
 
@@ -560,8 +576,9 @@ function M.render_diff()
 		vim.bo[ui.diff_buf].modifiable = true
 		vim.api.nvim_buf_set_lines(ui.diff_buf, 0, -1, false, lines)
 		vim.bo[ui.diff_buf].modifiable = false
+		vim.bo[ui.diff_buf].modified = false
 
-		-- Activate diff syntax engine for this buffer
+		-- Activate syntax highlighting
 		vim.bo[ui.diff_buf].filetype = "diff"
 		vim.bo[ui.diff_buf].syntax = "diff"
 	end
