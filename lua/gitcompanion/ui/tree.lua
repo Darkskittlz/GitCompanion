@@ -104,6 +104,10 @@ function M.build_tree()
       ui.tree_root = M.build_tree_from_files(ui.changed_files)
       ui.visible_tree_lines = M.flatten_tree(ui.tree_root)
       ui.flat_nodes = ui.visible_tree_lines
+   else
+      ui.tree_root = { name = "", is_dir = true, children = {}, expanded = true }
+      ui.visible_tree_lines = {}
+      ui.flat_nodes = {}
    end
 end
 
