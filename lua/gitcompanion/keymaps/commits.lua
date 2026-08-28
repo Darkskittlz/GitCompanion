@@ -211,7 +211,9 @@ function M.attach(buf, state)
 		local cursor = vim.api.nvim_win_get_cursor(Ui.right_win)
 		local line = vim.api.nvim_buf_get_lines(Ui.right_buf, cursor[1] - 1, cursor[1], false)[1] or ""
 
-		local hash = line:match("(%x%x%x%x%x%x%x+)")
+		-- Strip leading graph characters, spaces, and asterisks to isolate the hash
+		local clean_line = line:gsub("[%*|\\/%_%-%s]+", " ")
+		local hash = clean_line:match("(%x%x%x%x%x%x%x+)")
 		if not hash then
 			return
 		end
