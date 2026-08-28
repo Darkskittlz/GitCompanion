@@ -49,15 +49,15 @@ function M.open_reset_modal(hash, state)
       },
    }
 
-   local selected = 1
+	local selected = 1
 
-   -- Popup window positioning
-   local ui = vim.api.nvim_list_uis()[1]
-   local width = 52
-   local height = #options + 2
+	-- Popup window positioning
+	local ui = vim.api.nvim_list_uis()[1]
+	local width = 52
+	local height = #options + 2
 
-   local row = math.floor((ui.height - height) / 2)
-   local col = math.floor((ui.width - width) / 2)
+	local row = math.floor((ui.height - height) / 2)
+	local col = math.floor((ui.width - width) / 2)
 
    local buf = vim.api.nvim_create_buf(false, true)
    local win = vim.api.nvim_open_win(buf, true, {
@@ -73,19 +73,19 @@ function M.open_reset_modal(hash, state)
       zindex = 500,
    })
 
-   local buf_desc = vim.api.nvim_create_buf(false, true)
-   local win_desc = vim.api.nvim_open_win(buf_desc, false, {
-      relative = "editor",
-      width = width,
-      height = 3,
-      row = row + height + 2,
-      col = col,
-      style = "minimal",
-      border = "rounded",
-      title = " Info ",
-      title_pos = "center",
-      zindex = 500,
-   })
+	local buf_desc = vim.api.nvim_create_buf(false, true)
+	local win_desc = vim.api.nvim_open_win(buf_desc, false, {
+		relative = "editor",
+		width = width,
+		height = 3,
+		row = row + height + 2,
+		col = col,
+		style = "minimal",
+		border = "rounded",
+		title = " Info ",
+		title_pos = "center",
+		zindex = 500,
+	})
 
    local wrapper = type(wrap_text) == "function" and wrap_text or fallback_wrap_text
 
@@ -96,9 +96,9 @@ function M.open_reset_modal(hash, state)
          lines[#lines + 1] = prefix .. opt.label
       end
 
-      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-      vim.api.nvim_buf_clear_namespace(buf, -1, 0, -1)
-      vim.api.nvim_buf_add_highlight(buf, -1, options[selected].hl, selected - 1, 0, -1)
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+		vim.api.nvim_buf_clear_namespace(buf, -1, 0, -1)
+		vim.api.nvim_buf_add_highlight(buf, -1, options[selected].hl, selected - 1, 0, -1)
 
       local wrapped = wrapper(options[selected].desc, width - 4)
       vim.api.nvim_buf_set_lines(buf_desc, 0, -1, false, wrapped)
@@ -108,7 +108,7 @@ function M.open_reset_modal(hash, state)
       end
    end
 
-   render()
+	render()
 
    local function close_all()
       if vim.api.nvim_win_is_valid(win_desc) then
@@ -143,12 +143,12 @@ function M.open_reset_modal(hash, state)
       render()
    end, { buffer = buf, noremap = true, silent = true })
 
-   local function apply_selected_reset()
-      local opt = options[selected]
-      if not opt or not opt.cmd then
-         close_all()
-         return
-      end
+	local function apply_selected_reset()
+		local opt = options[selected]
+		if not opt or not opt.cmd then
+			close_all()
+			return
+		end
 
       local out = vim.fn.system(opt.cmd)
       if vim.v.shell_error ~= 0 then
@@ -165,22 +165,32 @@ function M.open_reset_modal(hash, state)
          state.invalidate_cache()
       end
 
-      close_all()
-   end
+		vim.notify(opt.label .. " → " .. hash, vim.log.levels.INFO)
 
-   -- Modal Bindings
-   vim.keymap.set("n", "<CR>", apply_selected_reset, { buffer = buf, noremap = true, silent = true })
-   vim.keymap.set("n", "q", close_all, { buffer = buf, noremap = true, silent = true })
-   vim.keymap.set("n", "<Esc>", close_all, { buffer = buf, noremap = true, silent = true })
+		-- 1. Invalidate cache and re-fetch commits/branches asynchronously
+		if state.reload_with_fetch then
+			state.reload_with_fetch(state.Ui and state.Ui.current_branch)
+		elseif state.invalidate_cache then
+			state.invalidate_cache()
+		end
 
-   for idx, opt in ipairs(options) do
-      if opt.key then
-         vim.keymap.set("n", opt.key, function()
-            selected = idx
-            apply_selected_reset()
-         end, { buffer = buf, noremap = true, silent = true })
-      end
-   end
+		-- 2. Close modal windows
+		close_all()
+	end
+
+	-- Modal Bindings
+	vim.keymap.set("n", "<CR>", apply_selected_reset, { buffer = buf, noremap = true, silent = true })
+	vim.keymap.set("n", "q", close_all, { buffer = buf, noremap = true, silent = true })
+	vim.keymap.set("n", "<Esc>", close_all, { buffer = buf, noremap = true, silent = true })
+
+	for idx, opt in ipairs(options) do
+		if opt.key then
+			vim.keymap.set("n", opt.key, function()
+				selected = idx
+				apply_selected_reset()
+			end, { buffer = buf, noremap = true, silent = true })
+		end
+	end
 end
 
 return M

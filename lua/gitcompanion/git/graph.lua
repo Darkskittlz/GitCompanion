@@ -1,5 +1,3 @@
--- lua/gitcompanion/git/graph.lua
-
 local M = {}
 local State = require("gitcompanion.state")
 

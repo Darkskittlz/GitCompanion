@@ -49,7 +49,7 @@ function M.build_tree_from_files(files)
                if not current.children[part] then
                   current.children[part] = {
                      name = part,
-                     path = current_path, -- FIXED: Populate relative directory path
+                     path = current_path,
                      is_dir = true,
                      children = {},
                      expanded = true,
@@ -67,13 +67,16 @@ function M.flatten_tree(node, depth, result)
    result = result or {}
    depth = depth or 0
 
-   table.insert(result, {
-      node = node,
-      depth = depth,
-      path = node.path,
-      is_dir = node.is_dir,
-      text = M.format_node_text(node, depth),
-   })
+   -- FIX 1: Only insert node text if it isn't the invisible root node
+   if node.name ~= "" then
+      table.insert(result, {
+         node = node,
+         depth = depth,
+         path = node.path,
+         is_dir = node.is_dir,
+         text = M.format_node_text(node, depth - 1),
+      })
+   end
 
    if node.is_dir and node.expanded and node.children then
       local keys = {}
@@ -83,7 +86,7 @@ function M.flatten_tree(node, depth, result)
       table.sort(keys)
 
       for _, k in ipairs(keys) do
-         M.flatten_tree(node.children[k], depth + 1, result) -- FIXED: M.flatten_tree
+         M.flatten_tree(node.children[k], depth + 1, result)
       end
    end
 
@@ -91,16 +94,36 @@ function M.flatten_tree(node, depth, result)
 end
 
 function M.build_tree()
+   -- Imports the plugin's state management module to access global or session variables
    local State = require("gitcompanion.state")
+
+   -- Creates a local reference to the UI state table
    local ui = State.Ui
+
+   -- Safely exits the function early if the UI state table hasn't been initialized yet
    if not ui then
       return
    end
 
+   -- Checks if there are any active changed files available to render in the tree
    if ui.changed_files and #ui.changed_files > 0 then
+      -- Generates a hierarchical tree structure out of the list of changed file paths
       ui.tree_root = M.build_tree_from_files(ui.changed_files)
+
+      -- Flattens the hierarchical tree into a sequential list of visible lines for rendering
       ui.visible_tree_lines = M.flatten_tree(ui.tree_root)
+
+      -- Updates the flat nodes reference so cursor navigation and selections target the correct lines
       ui.flat_nodes = ui.visible_tree_lines
+   else
+      -- Resets the tree root to an empty directory node when no changed files exist
+      ui.tree_root = { name = "", is_dir = true, children = {}, expanded = true }
+
+      -- Clears the list of visible tree lines so stale data isn't displayed
+      ui.visible_tree_lines = {}
+
+      -- Clears the flat nodes table to match the empty state
+      ui.flat_nodes = {}
    end
 end
 
@@ -144,67 +167,63 @@ function M.toggle_tree_node()
 end
 
 function M.render_files_tree()
-   -- vim.schedule(function()
-   -- 	vim.notify("[GitCompanion Tree] render_files_tree called", vim.log.levels.DEBUG)
-   -- end)
-
    local State = require("gitcompanion.state")
    local ui = State.Ui
    if not ui or not ui.left_buf or not vim.api.nvim_buf_is_valid(ui.left_buf) then
       return
    end
 
-   if not ui.tree_root or ui._last_rendered_files ~= ui.changed_files then
+   -- FIX: Force tree rebuild if file count or reference changes
+   local current_files_len = (ui.changed_files and #ui.changed_files) or 0
+   local last_len = ui._last_files_len or -1
+
+   if not ui.tree_root or ui._last_rendered_files ~= ui.changed_files or current_files_len ~= last_len then
       M.build_tree()
       ui._last_rendered_files = ui.changed_files
+      ui._last_files_len = current_files_len
    end
 
+   local buf = ui.left_buf
    local ns = vim.api.nvim_create_namespace("gitcompanion_tree_hl")
 
-   vim.api.nvim_set_option_value("modifiable", true, { buf = ui.left_buf })
-   vim.api.nvim_buf_clear_namespace(ui.left_buf, ns, 0, -1)
+   vim.bo[buf].modifiable = true
 
-   local lines = {}
-   local visible_items = ui.visible_tree_lines or {}
+   local ok, err = pcall(function()
+      vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
 
-   for _, item in ipairs(visible_items) do
-      table.insert(lines, item.text or item.name or "")
-   end
+      local lines = {}
+      local visible_items = ui.visible_tree_lines or {}
 
-   if #lines == 0 then
-      if ui.changed_files and #ui.changed_files > 0 then
-         for _, file in ipairs(ui.changed_files) do
-            local path = type(file) == "table" and (file.path or file[1]) or file
-            table.insert(lines, "  " .. tostring(path))
-         end
-      else
+      for _, item in ipairs(visible_items) do
+         table.insert(lines, item.text or item.name or "")
+      end
+
+      if #lines == 0 then
          lines = { "  (No changed files)" }
       end
-   end
 
-   vim.api.nvim_buf_set_lines(ui.left_buf, 0, -1, false, lines)
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 
-   for line_idx, item in ipairs(visible_items) do
-      local node = item.node
-      if node and not node.is_dir then
-         local hl_group = node.staged and "GitSignsAdd" or "GitSignsChange"
-         if vim.fn.hlexists(hl_group) == 0 then
-            hl_group = node.staged and "Added" or "Changed"
+      for line_idx, item in ipairs(visible_items) do
+         local node = item.node
+         if node and not node.is_dir then
+            local hl_group = node.staged and "GitSignsAdd" or "GitSignsChange"
+            if vim.fn.hlexists(hl_group) == 0 then
+               hl_group = node.staged and "Added" or "Changed"
+            end
+            vim.api.nvim_buf_add_highlight(buf, ns, hl_group, line_idx - 1, 0, -1)
+         elseif node and node.is_dir then
+            vim.api.nvim_buf_add_highlight(buf, ns, "Directory", line_idx - 1, 0, -1)
          end
-         vim.api.nvim_buf_add_highlight(ui.left_buf, ns, hl_group, line_idx - 1, 0, -1)
-      elseif node and node.is_dir then
-         vim.api.nvim_buf_add_highlight(ui.left_buf, ns, "Directory", line_idx - 1, 0, -1)
       end
+   end)
+
+   vim.bo[buf].modifiable = false
+   vim.bo[buf].modified = false
+
+   if not ok then
+      vim.notify("[GitCompanion Tree Render Error] " .. tostring(err), vim.log.levels.ERROR)
    end
-
-   -- vim.schedule(function()
-   -- 	vim.notify(
-   -- 		string.format("[GitCompanion Tree] Wrote %d lines to buffer %d", #lines, ui.left_buf),
-   -- 		vim.log.levels.DEBUG
-   -- 	)
-   -- end)
-
-   vim.api.nvim_set_option_value("modifiable", false, { buf = ui.left_buf })
 end
 
 return M
