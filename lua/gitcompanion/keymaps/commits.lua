@@ -3,7 +3,6 @@ local reset = require("gitcompanion.git.reset")
 local dialogs = require("gitcompanion.ui.dialogs")
 local M = {}
 
--- comment
 --- Opens interactive fuzzy picker for checking out remote branches
 local function checkout_remote_branch(state)
 	local Ui = state.Ui or state
