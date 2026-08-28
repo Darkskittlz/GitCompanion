@@ -194,10 +194,11 @@ function M.load_commits_async(branch, cb)
 	vim.system(cmd, { text = true }, function(obj)
 		vim.schedule(function()
 			local raw_output = obj.stdout or ""
-			-- Split string by line breaks into a table of lines expected by nvim_buf_set_lines
 			local lines = vim.split(raw_output, "\n", { trimempty = true })
 
-			State.Ui.commit_graph_cache[target_branch] = lines
+			-- Use a separate cache for data so it doesn't overwrite the visual graph cache
+			State.Ui.commit_data_cache = State.Ui.commit_data_cache or {}
+			State.Ui.commit_data_cache[target_branch] = lines
 
 			if type(cb) == "function" then
 				cb(lines)
