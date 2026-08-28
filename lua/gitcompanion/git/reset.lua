@@ -159,15 +159,21 @@ function M.open_reset_modal(hash, state)
 
 		vim.notify(opt.label .. " → " .. hash:sub(1, 7), vim.log.levels.INFO)
 
-		-- Explicitly fetch and render graph colors on the new HEAD
-		local graph_ok, graph_mod = pcall(require, "gitcompanion.git.graph")
-		if graph_ok and type(graph_mod.fetch_git_graph_async) == "function" then
-			graph_mod.fetch_git_graph_async("HEAD")
+		-- Safely trigger graph and state refresh using the active branch name or current branch
+		local target_branch = (state.Ui and state.Ui.current_branch)
+			or vim.fn.system("git branch --show-current"):gsub("%s+", "")
+		if target_branch == "" then
+			target_branch = "HEAD"
 		end
 
-		if state.reload_with_fetch then
-			state.reload_with_fetch(state.Ui and state.Ui.current_branch)
-		elseif state.invalidate_cache then
+		local graph_ok, graph_mod = pcall(require, "gitcompanion.git.graph")
+		if graph_ok and type(graph_mod.fetch_git_graph_async) == "function" then
+			graph_mod.fetch_git_graph_async(target_branch)
+		end
+
+		if type(state.reload_with_fetch) == "function" then
+			state.reload_with_fetch(target_branch)
+		elseif type(state.invalidate_cache) == "function" then
 			state.invalidate_cache()
 		end
 
