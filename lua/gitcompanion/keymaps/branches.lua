@@ -385,7 +385,7 @@ function M.attach(buf, state)
 
 		-- Debug: Log execution context
 		local function debug_log(msg)
-			vim.notify("[Branch Keymap Debug] " .. msg, vim.log.levels.INFO)
+			-- vim.notify("[Branch Keymap Debug] " .. msg, vim.log.levels.INFO)
 		end
 
 		debug_log(

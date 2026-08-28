@@ -103,85 +103,95 @@ function M.discard_changes_selected()
 	local State = state_mod or _G.State or {}
 	local Ui = State.Ui or {}
 
-	-- vim.notify("[GitCompanion Debug] discard_changes_selected invoked", vim.log.levels.DEBUG)
+	vim.notify("[GitCompanion Debug] discard_changes_selected invoked", vim.log.levels.DEBUG)
 
 	if Ui.mode ~= "files" then
-		-- vim.notify("[GitCompanion Discard] Cancelled: Mode is " .. tostring(Ui.mode), vim.log.levels.WARN)
+		vim.notify("[GitCompanion Discard] Cancelled: Mode is " .. tostring(Ui.mode), vim.log.levels.WARN)
 		return
 	end
 
-	-- Determine selected file target
 	local sel_file = nil
 
-	-- 1. Try resolving via flat tree nodes if present
 	if Ui.flat_nodes and Ui.selected_index and Ui.flat_nodes[Ui.selected_index] then
 		local node = Ui.flat_nodes[Ui.selected_index]
 		sel_file = node.path or node.value or node.file
-		-- vim.notify(
-		-- 	string.format(
-		-- 		"[GitCompanion Debug] Target resolved via flat_nodes[%s]: %s",
-		-- 		tostring(Ui.selected_index),
-		-- 		tostring(sel_file)
-		-- 	),
-		-- 	vim.log.levels.DEBUG
-		-- )
+		vim.notify(
+			string.format(
+				"[GitCompanion Debug] Selected from flat_nodes index %s: path=%s",
+				tostring(Ui.selected_index),
+				tostring(sel_file)
+			),
+			vim.log.levels.DEBUG
+		)
+		if node.is_dir then
+			vim.notify("[GitCompanion Discard] Cannot discard changes on a directory node.", vim.log.levels.WARN)
+			return
+		end
 	end
 
-	-- 2. Fallback to changed_files array
 	if not sel_file and Ui.changed_files then
 		local raw = Ui.changed_files[Ui.selected_index]
+		vim.notify(
+			string.format(
+				"[GitCompanion Debug] Fallback lookup in changed_files at index %s, raw type: %s",
+				tostring(Ui.selected_index),
+				type(raw)
+			),
+			vim.log.levels.DEBUG
+		)
 		if type(raw) == "table" then
 			sel_file = raw.value or raw.path or raw.file
 		elseif type(raw) == "string" then
 			sel_file = raw
 		end
-		-- vim.notify(
-		-- 	string.format(
-		-- 		"[GitCompanion Debug] Target resolved via changed_files[%s]: %s",
-		-- 		tostring(Ui.selected_index),
-		-- 		tostring(sel_file)
-		-- 	),
-		-- 	vim.log.levels.DEBUG
-		-- )
 	end
 
 	if not sel_file then
-		-- vim.notify(
-		-- 	string.format("[GitCompanion Discard] No valid file found at row %s", tostring(Ui.selected_index)),
-		-- 	vim.log.levels.WARN
-		-- )
+		vim.notify(
+			string.format("[GitCompanion Discard] No valid file found at row %s", tostring(Ui.selected_index)),
+			vim.log.levels.WARN
+		)
 		return
 	end
 
-	-- Prompt user for confirmation
 	local confirm_result = vim.fn.confirm("Discard changes to " .. sel_file .. "?", "&Yes\n&No", 2)
 	if confirm_result ~= 1 then
-		-- vim.notify("[GitCompanion Discard] Discard cancelled by user", vim.log.levels.INFO)
+		vim.notify("[GitCompanion Discard] Discard cancelled by user", vim.log.levels.INFO)
 		return
 	end
 
-	-- Resolve Git Root
 	local status_mod = require("gitcompanion.git.status")
 	local root = (status_mod and status_mod.git_root and status_mod.git_root()) or "."
 
-	local target_path = root .. "/" .. sel_file
-
-	-- Check if the file is tracked by git or if it's untracked (newly created)
-	local check_tracked_cmd = { "git", "ls-files", "--error-match", sel_file }
-	local is_tracked = vim.fn.system(check_tracked_cmd)
-	local tracked_err = vim.v.shell_error
+	local status_output = vim.fn.system({ "git", "-C", root, "status", "--porcelain", "--", sel_file })
+	status_output = vim.trim(status_output)
+	vim.notify(
+		string.format("[GitCompanion Debug] git status porcelain for %s: '%s'", sel_file, status_output),
+		vim.log.levels.DEBUG
+	)
 
 	local cmd
-	if tracked_err == 0 and vim.trim(is_tracked) ~= "" then
-		-- File is tracked, use git restore
-		cmd = { "git", "restore", target_path }
+	if vim.startswith(status_output, "??") then
+		vim.notify("[GitCompanion Debug] File is untracked. Using git clean", vim.log.levels.DEBUG)
+		cmd = { "git", "-C", root, "clean", "-f", "--", sel_file }
 	else
-		-- File is untracked (new file), delete it from filesystem or use git clean
-		cmd = { "rm", target_path }
+		vim.notify("[GitCompanion Debug] File is tracked/modified. Using git restore", vim.log.levels.DEBUG)
+		cmd = { "git", "-C", root, "restore", "--staged", "--worktree", "--", sel_file }
 	end
 
 	local result = vim.fn.system(cmd)
 	local err = vim.v.shell_error
+	vim.notify(
+		string.format("[GitCompanion Debug] Command exit code: %s, output: %s", tostring(err), tostring(result)),
+		vim.log.levels.DEBUG
+	)
+
+	if err ~= 0 and not vim.startswith(status_output, "??") then
+		local fallback_cmd = { "git", "-C", root, "checkout", "HEAD", "--", sel_file }
+		vim.notify("[GitCompanion Debug] Restore failed, attempting checkout HEAD fallback", vim.log.levels.DEBUG)
+		result = vim.fn.system(fallback_cmd)
+		err = vim.v.shell_error
+	end
 
 	if err ~= 0 then
 		vim.notify("Failed to discard " .. sel_file .. ": " .. result, vim.log.levels.ERROR)
@@ -190,27 +200,40 @@ function M.discard_changes_selected()
 		vim.notify("Discarded changes in " .. sel_file, vim.log.levels.INFO)
 	end
 
-	-- Defer state reload by 20ms to allow filesystem and git index to flush
-	-- vim.notify("[GitCompanion Debug] Scheduling deferred reload in 20ms...", vim.log.levels.DEBUG)
-
 	vim.defer_fn(function()
-		-- vim.notify("[GitCompanion Debug] Deferred reload timer fired", vim.log.levels.DEBUG)
+		vim.notify("[GitCompanion Debug] Executing status refresh via get_changed_files_async...", vim.log.levels.DEBUG)
 
-		if type(state_mod.reload_files) == "function" then
-			-- vim.notify("[GitCompanion Debug] Calling state_mod.reload_files()", vim.log.levels.DEBUG)
-			state_mod.reload_files()
-		elseif type(state_mod.reload_with_fetch) == "function" then
-			-- vim.notify(
-			-- 	"[GitCompanion Debug] Calling fallback state_mod.reload_with_fetch() & wiping changed_files",
-			-- 	vim.log.levels.DEBUG
-			-- )
-			state_mod.Ui.changed_files = nil
-			state_mod.reload_with_fetch()
-		elseif type(State.refresh_ui) == "function" then
-			-- vim.notify("[GitCompanion Debug] Calling State.refresh_ui() directly", vim.log.levels.DEBUG)
-			State.refresh_ui()
+		if status_mod and type(status_mod.get_changed_files_async) == "function" then
+			status_mod.get_changed_files_async(function(files)
+				vim.notify(
+					string.format(
+						"[GitCompanion Debug] Async files callback returned count: %s",
+						tostring(files and #files or 0)
+					),
+					vim.log.levels.DEBUG
+				)
+
+				-- Force cache invalidation and redraw
+				Ui._last_rendered_files = nil
+				Ui._last_files_len = nil
+
+				local tree_ok, tree_mod = pcall(require, "gitcompanion.ui.tree")
+				if tree_ok then
+					if type(tree_mod.build_tree) == "function" then
+						tree_mod.build_tree()
+					end
+					if type(tree_mod.render_files_tree) == "function" then
+						tree_mod.render_files_tree()
+					end
+				end
+
+				local layout_ok, layout_mod = pcall(require, "gitcompanion.ui.layout")
+				if layout_ok and type(layout_mod.render_diff) == "function" then
+					layout_mod.render_diff()
+				end
+			end)
 		else
-			-- vim.notify("[GitCompanion Debug] Warning: No refresh method found!", vim.log.levels.WARN)
+			vim.notify("[GitCompanion Error] get_changed_files_async is not a function", vim.log.levels.ERROR)
 		end
 	end, 150)
 end
