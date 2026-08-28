@@ -4,7 +4,6 @@ local config = require("gitcompanion.config")
 local git_diff = require("gitcompanion.git.diff")
 
 -- TODO LIST
--- TODO: fix stash keymap not auto updating changed files state
 -- TODO: Fix X keymap not discarding changes
 -- TODO: fix git pipe printout
 
