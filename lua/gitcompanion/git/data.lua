@@ -190,7 +190,6 @@ function M.load_commits_async(branch, cb)
       target_branch,
       "--graph",
       "--format=%h|%p|%an|%cr|%s",
-      "--format=%h|%p|%an|%cr|%sD|%s",
    }
 
    vim.system(cmd, { text = true }, function(obj)
