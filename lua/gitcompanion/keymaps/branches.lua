@@ -379,29 +379,49 @@ function M.attach(buf, state)
 	end, "Push selected branch")
 
 	-- 'n' - Create New Branch
-	-- 'n' - Create New Branch
 	map("n", "n", function()
-		if vim.api.nvim_get_current_buf() ~= target_buf then
+		local cur_buf = vim.api.nvim_get_current_buf()
+		local left_buf = Ui.left_buf or target_buf
+
+		-- Debug: Log execution context
+		local function debug_log(msg)
+			-- vim.notify("[Branch Keymap Debug] " .. msg, vim.log.levels.INFO)
+		end
+
+		debug_log(
+			string.format(
+				"Triggered | CurBuf: %d | Target/LeftBuf: %d | Mode: %s",
+				cur_buf,
+				left_buf or -1,
+				tostring(Ui.mode)
+			)
+		)
+
+		-- 1. Check if we are in the left navigation window and mode is 'branches'
+		if cur_buf ~= left_buf or Ui.mode ~= "branches" then
+			debug_log("Not in branches float or mode mismatch -> Falling back to normal 'n'")
+			vim.cmd("normal! n")
 			return
 		end
 
 		local current_branch = get_selected_branch() or Ui.branch_selected or "HEAD"
+		debug_log("Selected parent branch: " .. tostring(current_branch))
+
 		if not current_branch or current_branch == "" then
 			vim.notify("No branch selected!", vim.log.levels.ERROR)
 			return
 		end
 
+		-- 2. Check for uncommitted working changes
 		local status = vim.fn.systemlist("git status --porcelain")
+		debug_log("Git status check found " .. tostring(#status) .. " modified lines")
+
 		if #status > 0 then
-			if type(state.show_centered_message) == "function" then
-				state.show_centered_message(
-					"🚨 You have uncommitted changes!\nCommit or stash before branching.",
-					"⚠️"
-				)
-			end
+			vim.notify("🚨 You have uncommitted changes! Commit or stash before branching.", vim.log.levels.ERROR)
 			return
 		end
 
+		-- 3. Open Floating Input Modal
 		local width, height = 50, 1
 		local uis = vim.api.nvim_list_uis()
 		local ui_width = uis[1] and uis[1].width or 80
@@ -420,6 +440,7 @@ function M.attach(buf, state)
 			zindex = 50,
 		})
 
+		debug_log("Opened input modal window ID: " .. tostring(input_win))
 		vim.cmd("startinsert")
 
 		local function confirm_new_branch()
@@ -427,11 +448,14 @@ function M.attach(buf, state)
 			local lines = vim.api.nvim_buf_get_lines(input_buf, 0, 1, false)
 			local new_branch = vim.trim(lines[1] or "")
 
+			debug_log("Attempting to create branch: '" .. new_branch .. "'")
+
 			if vim.api.nvim_win_is_valid(input_win) then
 				vim.api.nvim_win_close(input_win, true)
 			end
 
 			if new_branch == "" then
+				debug_log("Branch creation cancelled: Empty branch name")
 				return
 			end
 
@@ -440,11 +464,14 @@ function M.attach(buf, state)
 			vim.fn.jobstart(args, {
 				stdout_buffered = true,
 				stderr_buffered = true,
-				on_exit = function(_, exit_code, _)
+				on_exit = function(_, exit_code, stderr)
 					vim.schedule(function()
 						if exit_code == 0 then
+							debug_log("Successfully created branch: " .. new_branch)
 							if type(state.show_centered_message) == "function" then
 								state.show_centered_message("✅ Created and checked out branch: " .. new_branch)
+							else
+								vim.notify("✅ Created and checked out branch: " .. new_branch, vim.log.levels.INFO)
 							end
 
 							Ui.branch_selected = new_branch
@@ -465,11 +492,10 @@ function M.attach(buf, state)
 								end
 							end)
 						else
-							if type(state.show_centered_message) == "function" then
-								state.show_centered_message("⚠️ Failed to create branch: " .. new_branch)
-							else
-								vim.notify("Failed to create branch '" .. new_branch .. "'", vim.log.levels.ERROR)
-							end
+							local err_msg = stderr and #stderr > 0 and table.concat(stderr, " ")
+								or "Failed to create branch."
+							debug_log("Git checkout failed: " .. err_msg)
+							vim.notify("🚨 " .. err_msg, vim.log.levels.ERROR)
 						end
 					end)
 				end,
@@ -479,6 +505,7 @@ function M.attach(buf, state)
 		vim.keymap.set({ "i", "n" }, "<CR>", confirm_new_branch, { buffer = input_buf, noremap = true, silent = true })
 
 		vim.keymap.set({ "i", "n" }, "<Esc>", function()
+			debug_log("Esc pressed in prompt modal, closing")
 			vim.cmd("stopinsert")
 			if vim.api.nvim_win_is_valid(input_win) then
 				vim.api.nvim_win_close(input_win, true)

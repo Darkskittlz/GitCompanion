@@ -31,26 +31,67 @@ end
 -- Default initial tree root
 M.Ui.tree_root = M.Ui.tree_root or M.init_tree_root()
 
+local function log_debug(msg)
+	vim.schedule(function()
+		-- vim.notify("[GitCompanion Debug] " .. msg, vim.log.levels.DEBUG)
+	end)
+end
+
 -------------------------------------------------------------------------------
 -- 2. EXPORTED DATA & REFRESH METHODS
 -------------------------------------------------------------------------------
 ---
 ------ Re-fetches status/changed files and re-builds the tree
 function M.reload_files(cb)
-	local ok, data = pcall(require, "gitcompanion.git.data")
-	if ok and type(data.load_status_async) == "function" then
-		data.load_status_async(function()
-			M.refresh_ui({ skip_fetch = true })
-			if type(cb) == "function" then
-				cb()
-			end
-		end)
-	else
-		-- Fallback to general refresh if load_status_async is named differently
-		M.refresh_ui()
-		if type(cb) == "function" then
-			cb()
+	log_debug("reload_files START | Clearing state caches...")
+
+	-- 1. Wipe cached UI tree structures completely
+	M.Ui.changed_files = nil
+	M.Ui.flat_nodes = nil
+	M.Ui.tree_nodes = nil
+	M.Ui.file_tree = nil
+	M.Ui._last_rendered_files = nil
+	M.Ui._last_files_len = nil
+
+	local ok_data, data = pcall(require, "gitcompanion.git.data")
+
+	-- Sync fetch status fallback
+	if ok_data then
+		if type(data.get_status) == "function" then
+			M.Ui.changed_files = data.get_status()
+		elseif type(data.load_status) == "function" then
+			M.Ui.changed_files = data.load_status()
 		end
+	end
+
+	-- 2. Force-rebuild the file tree
+	local ok_tree, tree = pcall(require, "gitcompanion.ui.tree")
+	if not ok_tree then
+		ok_tree, tree = pcall(require, "gitcompanion.tree")
+	end
+
+	if ok_tree and type(tree) == "table" then
+		if type(tree.build_tree) == "function" then
+			tree.build_tree()
+		elseif type(tree.init) == "function" then
+			tree.init()
+		end
+	end
+
+	-- 3. Render UI updates & immediate tree/layout redraw
+	M.refresh_ui({ skip_fetch = true })
+
+	if ok_tree and type(tree.render_files_tree) == "function" then
+		tree.render_files_tree()
+	end
+
+	local layout_ok, layout_mod = pcall(require, "gitcompanion.ui.layout")
+	if layout_ok and type(layout_mod.render_diff) == "function" then
+		layout_mod.render_diff()
+	end
+
+	if type(cb) == "function" then
+		cb()
 	end
 end
 
@@ -161,20 +202,46 @@ function M.load_stashes_async(cb)
 	end
 end
 
---- Re-fetches stashes and status, then updates the UI
+--- Re-fetches stashes and status, switches view mode, and updates UI
 function M.reload_stashes(cb)
-	M.clear_cache() -- Invalidate all stale diff caches before fetching updated stash references
-	M.load_stashes_async(function()
-		-- Also refresh changed files so apply/pop updates the file tree
-		if type(M.reload_files) == "function" then
-			M.reload_files(cb)
-		else
-			M.refresh_ui({ skip_fetch = true })
-			if type(cb) == "function" then
-				cb()
-			end
+	log_debug("reload_stashes START | Switching mode to stashes")
+
+	-- 1. Force-wipe all file tree structures and caches synchronously first
+	M.Ui.changed_files = nil
+	M.Ui.flat_nodes = nil
+	M.Ui.tree_nodes = nil
+	M.Ui.file_tree = nil
+	M.Ui.tree_root = M.init_tree_root()
+
+	-- 2. Force UI mode to stashes so layout switches tabs automatically
+	M.Ui.mode = "stashes"
+	M.Ui.stashes_loaded = false
+
+	local ok_data, data = pcall(require, "gitcompanion.git.data")
+	local stashes = {}
+
+	if ok_data and type(data.get_stashes) == "function" then
+		stashes = data.get_stashes()
+	else
+		-- Direct CLI fallback if data helper missing
+		local out = vim.fn.systemlist("git stash list")
+		if vim.v.shell_error == 0 then
+			stashes = out
 		end
-	end)
+	end
+
+	M.Ui.stashes = stashes or {}
+
+	if M.Ui.selected_index and M.Ui.selected_index > #M.Ui.stashes then
+		M.Ui.selected_index = math.max(1, #M.Ui.stashes)
+	end
+
+	-- 3. Force an immediate UI refresh for the new mode before invoking callbacks
+	M.refresh_ui({ skip_fetch = true })
+
+	if type(cb) == "function" then
+		cb()
+	end
 end
 
 -------------------------------------------------------------------------------

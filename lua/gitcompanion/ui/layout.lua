@@ -46,17 +46,10 @@ function M.init_ui()
    end)
 end
 
--- local function debug_log(msg, level)
--- 	level = level or vim.log.levels.DEBUG
--- 	vim.schedule(function()
--- 		vim.notify("[GitCompanion UI] " .. msg, level)
--- 	end)
--- end
-
 function M.update_window_layout()
    local Ui = get_ui()
    if not Ui then
-      -- debug_log("Layout update aborted: 'Ui' table is nil", vim.log.levels.WARN)
+      -- vim.notify("[gitcompanion] update_window_layout: Ui state nil", vim.log.levels.WARN)
       return
    end
 
@@ -81,8 +74,22 @@ function M.update_window_layout()
    local lower_row = help_row - lower_h - 2
    local diff_row = 2
 
-   local diff_h = (Ui.mode == "branches") and math.max(log_row - diff_row - 2, 1)
-       or math.max(lower_row - diff_row - 2, 1)
+   -- Direct calculation fix for diff height when lower window is visible
+   local target_lower_row = (Ui.mode == "branches") and log_row or lower_row
+   local diff_h = math.max(target_lower_row - diff_row - 2, 1)
+
+   -- vim.notify(
+   -- 	string.format(
+   -- 		"[gitcompanion] layout calc | mode: %s | editor_h: %d | diff_row: %d | diff_h: %d | lower_row: %d | lower_h: %d",
+   -- 		tostring(Ui.mode),
+   -- 		editor_h,
+   -- 		diff_row,
+   -- 		diff_h,
+   -- 		lower_row,
+   -- 		(Ui.mode == "branches" and branch_h or lower_h)
+   -- 	),
+   -- 	vim.log.levels.DEBUG
+   -- )
 
    -- 1. Ensure Top Diff Buffer & Window
    if not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
@@ -144,16 +151,18 @@ function M.update_window_layout()
    end
 
    -- 3. Navigation / List Window
-   local left_title = " Files "
+   local titles = {
+      files = " Files ",
+      branches = " Branches ",
+      stashes = " Stashes ",
+   }
+   local left_title = titles[Ui.mode] or " Files "
    local left_h = lower_h
    local left_row = lower_row
 
    if Ui.mode == "branches" then
-      left_title = " Branches "
       left_h = branch_h
       left_row = branch_row
-   elseif Ui.mode == "stashes" then
-      left_title = " Stashes "
    end
 
    if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
@@ -169,14 +178,9 @@ function M.update_window_layout()
    end
 end
 
--- local function log_debug(msg, level)
--- 	vim.notify("[GitCompanion Debug] " .. msg, level or vim.log.levels.INFO)
--- end
-
 function M.toggle_mode(direction)
    local Ui = get_ui()
    if not Ui then
-      -- log_debug("toggle_mode aborted: Ui context is nil", vim.log.levels.WARN)
       return
    end
 
@@ -189,7 +193,6 @@ function M.toggle_mode(direction)
       end
    end
 
-   local prev_mode = Ui.mode
    if direction == "next" then
       current_idx = (current_idx % #modes) + 1
    elseif direction == "prev" then
@@ -200,8 +203,6 @@ function M.toggle_mode(direction)
    Ui.selected_index = 1
    Ui.user_navigated = true
 
-   -- log_debug(string.format("toggle_mode: %s -> %s (dir: %s)", prev_mode or "nil", Ui.mode, direction))
-
    M.update_window_layout()
    M.refresh_ui()
 
@@ -209,12 +210,7 @@ function M.toggle_mode(direction)
    local active_win = (Ui.mode == "branches") and Ui.right_win or Ui.left_win
    if active_win and vim.api.nvim_win_is_valid(active_win) then
       vim.api.nvim_set_current_win(active_win)
-      local ok, err = pcall(vim.api.nvim_win_set_cursor, active_win, { 1, 0 })
-      if not ok then
-         -- log_debug("Failed to set cursor on active_win: " .. tostring(err), vim.log.levels.WARN)
-      end
-   else
-      -- log_debug("active_win is invalid or nil for mode: " .. tostring(Ui.mode), vim.log.levels.WARN)
+      pcall(vim.api.nvim_win_set_cursor, active_win, { 1, 0 })
    end
 
    -- Trigger diff population for newly focused buffer
@@ -227,40 +223,59 @@ end
 function M.render_left()
    local Ui = get_ui()
    if not Ui or not Ui.left_buf or not vim.api.nvim_buf_is_valid(Ui.left_buf) then
-      -- log_debug("render_left skipped: Ui or left_buf invalid", vim.log.levels.WARN)
+      -- vim.notify("[gitcompanion] render_left: Invalid buffer or state", vim.log.levels.WARN)
       return
    end
 
-   -- log_debug("render_left called | Mode: " .. tostring(Ui.mode))
+   local buf = Ui.left_buf
+   local ns_left = vim.api.nvim_create_namespace("gitcompanion_left_hl")
 
+   -- Debug log for render entry
+   -- vim.notify(
+   -- 	string.format(
+   -- 		"[gitcompanion] render_left start | mode: %s | win_valid: %s",
+   -- 		tostring(Ui.mode),
+   -- 		tostring(Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win))
+   -- 	),
+   -- 	vim.log.levels.DEBUG
+   -- )
+
+   -- Dynamic window border title based on current mode
+   if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
+      local titles = {
+         files = " Files ",
+         branches = " Branches ",
+         stashes = " Stashes ",
+      }
+      vim.api.nvim_win_set_config(Ui.left_win, {
+         title = titles[Ui.mode] or " Files ",
+         title_pos = "center",
+      })
+   end
+
+   -- 1. Mode: Files (delegates to tree rendering module)
    if Ui.mode == "files" then
       local ok, tree = pcall(require, "gitcompanion.ui.tree")
       if not ok then
          ok, tree = pcall(require, "gitcompanion.tree")
       end
 
-      if ok and type(tree) == "table" and type(tree.render_files_tree) == "function" then
-         local tree_ok, err = pcall(tree.render_files_tree)
-         -- if not tree_ok then
-         -- log_debug("Error in render_files_tree: " .. tostring(err), vim.log.levels.ERROR)
-         -- end
+      -- vim.notify(
+      -- 	string.format("[gitcompanion] render_left delegating to tree | module_found: %s", tostring(ok)),
+      -- 	vim.log.levels.DEBUG
+      -- )
 
-         local flat_count = Ui.flat_nodes and #Ui.flat_nodes or 0
-         local visible_count = Ui.visible_tree_lines and #Ui.visible_tree_lines or 0
-         -- log_debug(
-         -- 	string.format("render_left [files]: flat_nodes=%d, visible_tree_lines=%d", flat_count, visible_count)
-         -- )
+      if ok and type(tree) == "table" and type(tree.render_files_tree) == "function" then
+         tree.render_files_tree()
       else
-         -- vim.notify("[GitCompanion UI] Could not load tree module", vim.log.levels.ERROR)
+         -- vim.notify("[gitcompanion] render_left: Failed to load tree rendering module", vim.log.levels.ERROR)
       end
 
       M.render_diff()
       return
    end
 
-   -- Branch & Stash modes...
-   vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.left_buf })
-
+   -- 2. Mode: Branches / Stashes
    local lines = {}
    local highlights = {}
 
@@ -269,13 +284,17 @@ function M.render_left()
           or Ui.branch_selected
           or "HEAD"
       local branches = Ui.branches or {}
-      -- log_debug(string.format("render_left [branches]: total=%d, current=%s", #branches, current))
+
+      -- vim.notify(
+      -- 	string.format("[gitcompanion] render_left branches count: %d | current: %s", #branches, tostring(current)),
+      -- 	vim.log.levels.DEBUG
+      -- )
 
       for i, b in ipairs(branches) do
          local marker = (b == current) and "*" or " "
-         local status = (Ui.branch_statuses and Ui.branch_statuses[b]) or ""
+         local status_text = (Ui.branch_statuses and Ui.branch_statuses[b]) or ""
          local ahead_behind = (Ui.branch_ahead_behind and Ui.branch_ahead_behind[b]) or ""
-         table.insert(lines, string.format("%2s %s %s %s", marker, b, status, ahead_behind))
+         table.insert(lines, string.format("%2s %s %s %s", marker, b, status_text, ahead_behind))
 
          if b == current then
             table.insert(highlights, { line = i, hl = "GitBranchCurrent" })
@@ -298,11 +317,10 @@ function M.render_left()
       end
 
       local stashes = Ui.stashes or {}
-      -- log_debug(string.format("render_left [stashes]: total=%d", #stashes))
-
-      -- Pass 1: Parse entries and find maximum branch name length
       local parsed_stashes = {}
       local max_branch_len = 0
+
+      -- vim.notify(string.format("[gitcompanion] render_left stashes count: %d", #stashes), vim.log.levels.DEBUG)
 
       for _, s in ipairs(stashes) do
          local branch, msg = s:match("^stash@{%d+}:%s*On%s+([^:]+):%s*(.*)$")
@@ -316,10 +334,8 @@ function M.render_left()
          table.insert(parsed_stashes, { branch = branch, msg = msg })
       end
 
-      -- Pass 2: Build lines with padded branch names
       for i, item in ipairs(parsed_stashes) do
          local prefix = string.format("  %d. ", i)
-         -- Pad branch name to match max_branch_len
          local padded_branch = item.branch .. string.rep(" ", max_branch_len - #item.branch)
          local separator = " "
          local line_text = prefix .. padded_branch .. separator .. item.msg
@@ -329,7 +345,6 @@ function M.render_left()
          local prefix_bytes = #prefix
          local branch_bytes = #padded_branch
 
-         -- 1. Number ("  1. ") -> Gray
          table.insert(highlights, {
             line = i,
             hl = "GitStashNumber",
@@ -337,7 +352,6 @@ function M.render_left()
             end_col = prefix_bytes,
          })
 
-         -- 2. Padded Branch ("mergeBranch    ") -> Blue
          table.insert(highlights, {
             line = i,
             hl = "GitStashBranch",
@@ -345,7 +359,6 @@ function M.render_left()
             end_col = prefix_bytes + branch_bytes,
          })
 
-         -- 3. Message (": message text") -> Green
          table.insert(highlights, {
             line = i,
             hl = "GitStashText",
@@ -361,13 +374,18 @@ function M.render_left()
       lines = { placeholder }
    end
 
-   vim.api.nvim_buf_set_lines(Ui.left_buf, 0, -1, false, lines)
-   vim.api.nvim_buf_clear_namespace(Ui.left_buf, ns_left, 0, -1)
+   -- Write content and set highlights safely
+   vim.bo[buf].modifiable = true
+
+   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+   vim.api.nvim_buf_clear_namespace(buf, ns_left, 0, -1)
    for _, h in ipairs(highlights) do
-      vim.api.nvim_buf_add_highlight(Ui.left_buf, ns_left, h.hl, h.line - 1, h.col or 0, h.end_col or h.length or -1)
+      vim.api.nvim_buf_add_highlight(buf, ns_left, h.hl, h.line - 1, h.col or 0, h.end_col or h.length or -1)
    end
 
-   vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.left_buf })
+   vim.bo[buf].modifiable = false
+   vim.bo[buf].modified = false
+
    M.render_diff()
 end
 
@@ -409,7 +427,6 @@ function M.render_right()
    local graph_chars_list = _G.graph_chars or { "*", "|", "/", "\\", "-", " ", "o", "*" }
    local graph_colors = _G.graph_colors or { "#56b6c2", "#e06c75", "#98c379", "#d19a66", "#c678dd" }
 
-   -- Replace the string parsing block inside M.render_right() loop:
    for i, line in ipairs(out) do
       -- 1. Highlight git graph symbols (*, |, \, /)
       for pos = 1, #line do
@@ -424,8 +441,7 @@ function M.render_right()
          end
       end
 
-      -- 2. Extract match byte indices to prevent false-positive finds
-      local h_start, h_end, hash, date, author, msg = line:find("(%x%x%x%x%x%x%x+)%s+(%d%d/%d%d/%d%d)%s+(%S+)%s+(.+)")
+      local h_start, _, hash, date, author, msg = line:find("(%x%x%x%x%x%x%x+)%s+(%d%d/%d%d/%d%d)%s+(%S+)%s+(.+)")
 
       if h_start then
          -- Calculate strict column positions based on regex captures
@@ -468,7 +484,6 @@ function M.render_right()
 end
 
 function M.fetch_diff_async(file_path, is_dir)
-   -- log_debug(string.format("fetch_diff_async: path=%s, is_dir=%s", tostring(file_path), tostring(is_dir)))
    return diff.fetch_diff_async(file_path, is_dir)
 end
 
@@ -514,6 +529,7 @@ end
 
 function M.render_diff()
    local State = require("gitcompanion.state")
+   local diff_mod = require("gitcompanion.git.diff")
    local ui = State.Ui
    if not ui or not ui.diff_buf or not vim.api.nvim_buf_is_valid(ui.diff_buf) then
       return
@@ -535,10 +551,12 @@ function M.render_diff()
          lines = ui.diff_cache[path]
       else
          lines = { "[Loading file diff...]" }
-         diff.fetch_diff_async(path, is_dir)
+         if type(diff_mod.fetch_diff_async) == "function" then
+            diff_mod.fetch_diff_async(path, is_dir)
+         end
       end
 
-      -- 2. MODE: Commits / Branches (Shows diff for commit under cursor in Commit Log)
+      -- 2. MODE: Commits / Branches
    elseif ui.mode == "commits" or ui.mode == "branches" then
       local selected_commit = M.get_selected_commit_hash()
 
@@ -548,7 +566,9 @@ function M.render_diff()
          lines = ui.diff_cache[selected_commit]
       else
          lines = { "[Loading commit diff for " .. selected_commit .. "...]" }
-         diff.fetch_commit_diff_async(selected_commit)
+         if type(diff_mod.fetch_commit_diff_async) == "function" then
+            diff_mod.fetch_commit_diff_async(selected_commit)
+         end
       end
 
       -- 3. MODE: Stashes
@@ -560,16 +580,27 @@ function M.render_diff()
          cursor_line = ui.selected_index or 1
       end
 
-      local stash_item = (ui.stashes or {})[cursor_line]
-      local stash_ref = stash_item and stash_item:match("(stash@{%d+})")
-
-      if not stash_ref then
-         lines = { "No stash selected." }
-      elseif ui.diff_cache[stash_ref] then
-         lines = ui.diff_cache[stash_ref]
+      local stashes = ui.stashes or {}
+      if #stashes == 0 then
+         lines = { "No stashes available." }
       else
-         lines = { "[Loading stash diff...]" }
-         diff.fetch_stash_diff_async(stash_ref)
+         -- Calculate zero-indexed stash reference from line position
+         local stash_index = math.max(0, cursor_line - 1)
+         local stash_ref = string.format("stash@{%d}", stash_index)
+
+         if ui.diff_cache[stash_ref] then
+            lines = ui.diff_cache[stash_ref]
+         else
+            lines = { "[Loading stash diff for " .. stash_ref .. "...]" }
+            if type(diff_mod.fetch_stash_diff_async) == "function" then
+               diff_mod.fetch_stash_diff_async(stash_ref)
+            else
+               -- Fallback if async loader isn't attached yet
+               local out = vim.fn.systemlist("git stash show -p " .. stash_ref)
+               lines = (#out > 0) and out or { "  (Empty stash diff)" }
+               ui.diff_cache[stash_ref] = lines
+            end
+         end
       end
    end
 
@@ -577,8 +608,9 @@ function M.render_diff()
       vim.bo[ui.diff_buf].modifiable = true
       vim.api.nvim_buf_set_lines(ui.diff_buf, 0, -1, false, lines)
       vim.bo[ui.diff_buf].modifiable = false
+      vim.bo[ui.diff_buf].modified = false
 
-      -- Activate diff syntax engine for this buffer
+      -- Activate syntax highlighting
       vim.bo[ui.diff_buf].filetype = "diff"
       vim.bo[ui.diff_buf].syntax = "diff"
    end
