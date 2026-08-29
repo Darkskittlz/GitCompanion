@@ -4,8 +4,8 @@ local config = require("gitcompanion.config")
 local git_diff = require("gitcompanion.git.diff")
 
 -- TODO LIST
--- TODO: Fix X keymap not discarding changes
 -- TODO: fix git pipe printout
+-- TODO: get a summary of each commits file changes at the top of each commit
 
 -- Require keymap submodules
 local global_keymaps = require("gitcompanion.keymaps.global")

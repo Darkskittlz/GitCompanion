@@ -391,7 +391,7 @@ end
 
 function M.render_right()
    local Ui = get_ui()
-   if not Ui or not Ui.right_buf or not vim.api.nvim_buf_is_valid(Ui.right_buf) then
+   if not Ui or not Ui.right_buf or type(Ui.right_buf) ~= "number" or not vim.api.nvim_buf_is_valid(Ui.right_buf) then
       return
    end
 
@@ -424,11 +424,38 @@ function M.render_right()
 
    -- 2. Apply colors and highlights
    Ui.branch_colors = Ui.branch_colors or {}
-   local graph_chars_list = _G.graph_chars or { "*", "|", "/", "\\", "-", " ", "o", "*" }
+   local graph_chars_list = _G.graph_chars
+       or {
+          "○",
+          "●",
+          "│",
+          "┃",
+          "┆",
+          "┇",
+          "┊",
+          "┋",
+          "╭",
+          "╮",
+          "╰",
+          "╯",
+          "┌",
+          "┐",
+          "└",
+          "┘",
+          "├",
+          "┤",
+          "┬",
+          "┴",
+          "┼",
+          "─",
+          "━",
+          "│",
+          " ",
+       }
    local graph_colors = _G.graph_colors or { "#56b6c2", "#e06c75", "#98c379", "#d19a66", "#c678dd" }
 
    for i, line in ipairs(out) do
-      -- 1. Highlight git graph symbols (*, |, \, /)
+      -- 1. Highlight git graph symbols
       for pos = 1, #line do
          local char = line:sub(pos, pos)
          if vim.tbl_contains(graph_chars_list, char) then
@@ -441,26 +468,44 @@ function M.render_right()
          end
       end
 
-      local h_start, _, hash, date, author, msg = line:find("(%x%x%x%x%x%x%x+)%s+(%d%d/%d%d/%d%d)%s+(%S+)%s+(.+)")
+      -- Only attempt to match and parse lines that contain a 7-character hex hash
+      if line:find("%x%x%x%x%x%x%x+") then
+         local match_res = {
+            line:find(
+               "([%s%-%|/\\%*%+%.:%w%_%-%(%]╭╮╰╯├┤┴┬─│%[%]]-%s*)(%x%x%x%x%x%x%x+)%s+(%S+)%s+(%S+)%s+(.+)"
+            ),
+         }
 
-      if h_start then
-         -- Calculate strict column positions based on regex captures
-         local hash_s = h_start - 1
-         local hash_e = hash_s + #hash
+         if #match_res > 0 then
+            local _, _, hash, date, author, msg = unpack(match_res)
+            local h_start = line:find(hash, 1, true)
 
-         local date_s = line:find(date, hash_e, true) - 1
-         local date_e = date_s + #date
+            if h_start then
+               local hash_s = h_start - 1
+               local hash_e = hash_s + #hash
 
-         local author_s = line:find(author, date_e, true) - 1
-         local author_e = author_s + #author
+               local date_s = line:find(date, hash_e, true) - 1
+               local date_e = date_s + #date
 
-         local msg_s = line:find(msg, author_e, true) - 1
+               local author_s = line:find(author, date_e, true) - 1
+               local author_e = author_s + #author
 
-         -- Apply clean highlights only to valid commit rows
-         vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitHash", i - 1, hash_s, hash_e)
-         vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitDate", i - 1, date_s, date_e)
-         vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitAuthor", i - 1, author_s, author_e)
-         vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitMsg", i - 1, msg_s, -1)
+               local msg_s = line:find(msg, author_e, true) - 1
+
+               vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitHash", i - 1, hash_s, hash_e)
+               vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitDate", i - 1, date_s, date_e)
+               vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitAuthor", i - 1, author_s, author_e)
+               vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitMsg", i - 1, msg_s, -1)
+            end
+         else
+            -- Log warning only if it has a hash-like structure or isn't just graph lines
+            if not line:match("^%s*[%[%]]") then
+               vim.notify(
+                  string.format("[Match Fail] Line %d did not match pattern: %s", i, line),
+                  vim.log.levels.WARN
+               )
+            end
+         end
       end
    end
 

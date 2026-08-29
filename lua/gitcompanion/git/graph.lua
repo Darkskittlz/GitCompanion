@@ -1,5 +1,6 @@
 local M = {}
 local State = require("gitcompanion.state")
+local pipes = require("gitcompanion.git.pipes")
 
 local render_right_fn
 
@@ -9,14 +10,11 @@ function M.setup_dependencies(opts)
 end
 
 function M.convert_graph(line)
-	line = line:gsub("%*%-", "*-")
-	line = line:gsub("|\\", "|\\")
-	line = line:gsub("|/", "|/")
-	return line
+	return pipes.process_line(line)
 end
 
--- Shared format for both sync and async graph fetchers
-local GRAPH_FORMAT = "%h %ad %<(8,trunc)%an %s"
+-- Adjust format to place columns cleanly after the graph area
+local GRAPH_FORMAT = "%h  %ad  %an  %s"
 
 function M.git_graph(branch)
 	branch = branch or "HEAD"
@@ -25,14 +23,11 @@ function M.git_graph(branch)
 		GRAPH_FORMAT,
 		branch
 	)
-	local lines = vim.fn.systemlist(cmd)
+	local raw_output = vim.fn.system(cmd)
 	if vim.v.shell_error ~= 0 then
 		return { "[No commits]" }
 	end
-	for i, line in ipairs(lines) do
-		lines[i] = M.convert_graph(line)
-	end
-	return lines
+	return pipes.transform_output(raw_output)
 end
 
 function M.fetch_git_graph_async(branch)
@@ -49,8 +44,19 @@ function M.fetch_git_graph_async(branch)
 		branch,
 	}, { text = true }, function(obj)
 		vim.schedule(function()
+			-- DEBUG: Check raw exit code and output length
+			vim.notify(
+				string.format("[Graph Debug] code: %s, stdout len: %s", obj.code, obj.stdout and #obj.stdout or 0),
+				vim.log.levels.INFO
+			)
+
 			if obj.code == 0 and obj.stdout then
-				local lines = vim.split(obj.stdout, "\n", { trimempty = true })
+				local lines = pipes.transform_output(obj.stdout)
+
+				-- DEBUG: Print first converted line
+				if #lines > 0 then
+					vim.notify("[Graph Debug] Line 1: " .. lines[1], vim.log.levels.INFO)
+				end
 
 				Ui.commit_graph_cache = Ui.commit_graph_cache or {}
 				Ui.commit_graph_cache[branch] = #lines > 0 and lines or { "[No commits]" }
