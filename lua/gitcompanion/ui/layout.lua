@@ -737,7 +737,16 @@ function M.close_floating()
 end
 
 function M.show_floating_pair(stdout_lines, stderr_lines)
-   local full_text = table.concat(stdout_lines or {}, "\n") .. "\n" .. table.concat(stderr_lines or {}, "\n")
+   -- Combine stdout and stderr into a single list of lines
+   local combined_lines = {}
+   for _, line in ipairs(stdout_lines or {}) do
+      table.insert(combined_lines, line)
+   end
+   for _, line in ipairs(stderr_lines or {}) do
+      table.insert(combined_lines, line)
+   end
+
+   local full_text = table.concat(combined_lines, "\n")
    if string.find(full_text, "CONFLICT") then
       return
    end
@@ -746,19 +755,18 @@ function M.show_floating_pair(stdout_lines, stderr_lines)
 
    local ui = vim.api.nvim_list_uis()[1]
    local width = math.min(80, ui.width - 4)
-   local h_out = math.max(#(stdout_lines or {}) + 2, 3)
-   local h_err = math.max(#(stderr_lines or {}) + 2, 3)
-   local top = math.floor((ui.height - (h_out + h_err + 2)) / 2)
+   local height = math.max(#combined_lines + 2, 3)
+   local top = math.floor((ui.height - height) / 2)
    local col = math.floor((ui.width - width) / 2)
 
-   local buf_out = vim.api.nvim_create_buf(false, true)
-   vim.api.nvim_buf_set_lines(buf_out, 0, -1, false, stdout_lines or {})
-   vim.bo[buf_out].modifiable = false
+   local buf = vim.api.nvim_create_buf(false, true)
+   vim.api.nvim_buf_set_lines(buf, 0, -1, false, combined_lines)
+   vim.bo[buf].modifiable = false
 
-   local win_out = vim.api.nvim_open_win(buf_out, true, {
+   local win = vim.api.nvim_open_win(buf, true, {
       relative = "editor",
       width = width,
-      height = h_out,
+      height = height,
       row = top,
       col = col,
       style = "minimal",
@@ -768,37 +776,10 @@ function M.show_floating_pair(stdout_lines, stderr_lines)
       zindex = 600,
    })
 
-   local buf_err = vim.api.nvim_create_buf(false, true)
-   vim.api.nvim_buf_set_lines(buf_err, 0, -1, false, stderr_lines or {})
-   vim.bo[buf_err].modifiable = false
+   floating_windows.output = win
 
-   local win_err = vim.api.nvim_open_win(buf_err, false, {
-      relative = "editor",
-      width = width,
-      height = h_err,
-      row = top + h_out + 2,
-      col = col,
-      style = "minimal",
-      border = "rounded",
-      title = " Git Errors ",
-      title_pos = "center",
-      zindex = 600,
-   })
-
-   floating_windows.stdout = win_out
-   floating_windows.stderr = win_err
-
-   -- Bind keymaps to both stdout and stderr buffers
-   for _, buf in ipairs({ buf_out, buf_err }) do
-      local opts = { buffer = buf, nowait = true, silent = true }
-      vim.keymap.set("n", "H", function()
-         pcall(vim.api.nvim_set_current_win, win_out)
-      end, opts)
-      vim.keymap.set("n", "L", function()
-         pcall(vim.api.nvim_set_current_win, win_err)
-      end, opts)
-      vim.keymap.set("n", "q", M.close_floating, opts)
-   end
+   local opts = { buffer = buf, nowait = true, silent = true }
+   vim.keymap.set("n", "q", M.close_floating, opts)
 end
 
 function M.close()
