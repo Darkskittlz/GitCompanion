@@ -304,6 +304,19 @@ function M.toggle(opts)
    -- Autocmds for Navigation
    local group = vim.api.nvim_create_augroup("GitPickerAutoCmds", { clear = true })
 
+   vim.api.nvim_create_autocmd("WinEnter", {
+      group = vim.api.nvim_create_augroup("GitCompanionBorderUpdate", { clear = true }),
+      callback = function()
+         local Ui = get_ui()
+         if Ui and type(M.update_window_layout) == "function" then
+            local curr_win = vim.api.nvim_get_current_win()
+            if curr_win == Ui.left_win or curr_win == Ui.right_win or curr_win == Ui.diff_win then
+               M.update_window_layout()
+            end
+         end
+      end,
+   })
+
    vim.api.nvim_create_autocmd("CursorMoved", {
       group = group,
       buffer = Ui.right_buf,

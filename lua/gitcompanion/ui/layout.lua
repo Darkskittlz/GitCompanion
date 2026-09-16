@@ -22,7 +22,83 @@ end
 -------------------------------------------------------------------------------
 -- 1. INITIALIZATION & WINDOW LAYOUT MANAGEMENT
 -------------------------------------------------------------------------------
+-- Global/file-scoped namespace for right window highlights
+local ns_right = vim.api.nvim_create_namespace("gitcompanion_right_hl")
+local ns_left = vim.api.nvim_create_namespace("gitcompanion_left_hl")
+
+-- 1. DEFINE BORDER TABLES FIRST (So helpers can see them)
+local rainbow_border = {
+   { "╭", "RainbowBorder1" },
+   { "─", "RainbowBorder2" },
+   { "╮", "RainbowBorder3" },
+   { "│", "RainbowBorder4" },
+   { "╯", "RainbowBorder5" },
+   { "─", "RainbowBorder6" },
+   { "╰", "RainbowBorder7" },
+   { "│", "RainbowBorder8" },
+}
+
+local inactive_border = {
+   { "╭", "FloatBorder" },
+   { "─", "FloatBorder" },
+   { "╮", "FloatBorder" },
+   { "│", "FloatBorder" },
+   { "╯", "FloatBorder" },
+   { "─", "FloatBorder" },
+   { "╰", "FloatBorder" },
+   { "│", "FloatBorder" },
+}
+
+-- 2. HIGHLIGHT GROUP SETUP
+local function setup_border_highlights()
+   local colors = {
+      "#e06c75", -- Red
+      "#d19a66", -- Orange
+      "#e5c07b", -- Yellow
+      "#98c379", -- Green
+      "#56b6c2", -- Cyan
+      "#61afef", -- Blue
+      "#c678dd", -- Purple
+      "#be5046", -- Dark Red
+   }
+   for i, color in ipairs(colors) do
+      vim.api.nvim_set_hl(0, "RainbowBorder" .. i, { fg = color, default = true })
+   end
+end
+
+-- 3. DYNAMIC BORDER REFRESH
+local function update_active_borders()
+   local Ui = get_ui()
+   if not Ui then
+      return
+   end
+
+   local cur_win = vim.api.nvim_get_current_win()
+   local wins = { Ui.diff_win, Ui.left_win, Ui.right_win }
+
+   for _, win in ipairs(wins) do
+      if win and vim.api.nvim_win_is_valid(win) then
+         local border_style = (win == cur_win) and rainbow_border or inactive_border
+         vim.api.nvim_win_set_config(win, { border = border_style })
+      end
+   end
+end
+
+-- 4. AUTOCOMMAND FOR FOCUS SWITCHING
+vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
+   group = vim.api.nvim_create_augroup("GitCompanionBorders", { clear = true }),
+   callback = function()
+      update_active_borders()
+   end,
+})
+
+-------------------------------------------------------------------------------
+-- UI INITIALIZATION & LAYOUT
+-------------------------------------------------------------------------------
 function M.init_ui()
+   -- Initialize highlight groups on start
+   setup_border_highlights()
+
    local Ui = get_ui()
 
    status.get_changed_files_async(function()
@@ -49,7 +125,6 @@ end
 function M.update_window_layout()
    local Ui = get_ui()
    if not Ui then
-      -- vim.notify("[gitcompanion] update_window_layout: Ui state nil", vim.log.levels.WARN)
       return
    end
 
@@ -74,24 +149,10 @@ function M.update_window_layout()
    local lower_row = help_row - lower_h - 2
    local diff_row = 2
 
-   -- Direct calculation fix for diff height when lower window is visible
    local target_lower_row = (Ui.mode == "branches") and log_row or lower_row
    local diff_h = math.max(target_lower_row - diff_row - 2, 1)
 
-   -- vim.notify(
-   -- 	string.format(
-   -- 		"[gitcompanion] layout calc | mode: %s | editor_h: %d | diff_row: %d | diff_h: %d | lower_row: %d | lower_h: %d",
-   -- 		tostring(Ui.mode),
-   -- 		editor_h,
-   -- 		diff_row,
-   -- 		diff_h,
-   -- 		lower_row,
-   -- 		(Ui.mode == "branches" and branch_h or lower_h)
-   -- 	),
-   -- 	vim.log.levels.DEBUG
-   -- )
-
-   -- 1. Ensure Top Diff Buffer & Window
+   -- 1. Top Diff Window
    if not Ui.diff_buf or not vim.api.nvim_buf_is_valid(Ui.diff_buf) then
       Ui.diff_buf = vim.api.nvim_create_buf(false, true)
       vim.bo[Ui.diff_buf].filetype = "diff"
@@ -106,7 +167,7 @@ function M.update_window_layout()
       row = diff_row,
       col = col,
       style = "minimal",
-      border = "rounded",
+      border = inactive_border,
       title = " Code Changes ",
       title_pos = "center",
    }
@@ -117,7 +178,7 @@ function M.update_window_layout()
       vim.api.nvim_win_set_config(Ui.diff_win, diff_cfg)
    end
 
-   -- 2. Commit Log Window Visibility
+   -- 2. Commit Log Window
    if Ui.mode == "branches" then
       if not Ui.right_buf or not vim.api.nvim_buf_is_valid(Ui.right_buf) then
          Ui.right_buf = vim.api.nvim_create_buf(false, true)
@@ -132,7 +193,7 @@ function M.update_window_layout()
          row = log_row,
          col = col,
          style = "minimal",
-         border = "rounded",
+         border = inactive_border,
          title = " Commit Log ",
          title_pos = "center",
          zindex = 10,
@@ -157,25 +218,28 @@ function M.update_window_layout()
       stashes = " Stashes ",
    }
    local left_title = titles[Ui.mode] or " Files "
-   local left_h = lower_h
-   local left_row = lower_row
+   local left_h = (Ui.mode == "branches") and branch_h or lower_h
+   local left_row = (Ui.mode == "branches") and branch_row or lower_row
 
-   if Ui.mode == "branches" then
-      left_h = branch_h
-      left_row = branch_row
+   local left_cfg = {
+      relative = "editor",
+      width = w,
+      height = left_h,
+      row = left_row,
+      col = col,
+      border = inactive_border,
+      title = left_title,
+      title_pos = "center",
+   }
+
+   if not Ui.left_win or not vim.api.nvim_win_is_valid(Ui.left_win) then
+      Ui.left_win = vim.api.nvim_open_win(Ui.left_buf, false, left_cfg)
+   else
+      vim.api.nvim_win_set_config(Ui.left_win, left_cfg)
    end
 
-   if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
-      vim.api.nvim_win_set_config(Ui.left_win, {
-         relative = "editor",
-         width = w,
-         height = left_h,
-         row = left_row,
-         col = col,
-         title = left_title,
-         title_pos = "center",
-      })
-   end
+   -- Apply dynamic borders based on current focus
+   update_active_borders()
 end
 
 function M.toggle_mode(direction)
@@ -203,17 +267,19 @@ function M.toggle_mode(direction)
    Ui.selected_index = 1
    Ui.user_navigated = true
 
-   M.update_window_layout()
    M.refresh_ui()
 
-   -- Explicitly update active window cursor & re-render Code Changes diff
+   -- 1. Switch active window focus first
    local active_win = (Ui.mode == "branches") and Ui.right_win or Ui.left_win
    if active_win and vim.api.nvim_win_is_valid(active_win) then
       vim.api.nvim_set_current_win(active_win)
       pcall(vim.api.nvim_win_set_cursor, active_win, { 1, 0 })
    end
 
-   -- Trigger diff population for newly focused buffer
+   -- 2. Update layout and borders for focused window
+   M.update_window_layout()
+
+   -- 3. Trigger diff population
    M.render_diff()
 end
 
@@ -223,24 +289,12 @@ end
 function M.render_left()
    local Ui = get_ui()
    if not Ui or not Ui.left_buf or not vim.api.nvim_buf_is_valid(Ui.left_buf) then
-      -- vim.notify("[gitcompanion] render_left: Invalid buffer or state", vim.log.levels.WARN)
       return
    end
 
    local buf = Ui.left_buf
    local ns_left = vim.api.nvim_create_namespace("gitcompanion_left_hl")
 
-   -- Debug log for render entry
-   -- vim.notify(
-   -- 	string.format(
-   -- 		"[gitcompanion] render_left start | mode: %s | win_valid: %s",
-   -- 		tostring(Ui.mode),
-   -- 		tostring(Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win))
-   -- 	),
-   -- 	vim.log.levels.DEBUG
-   -- )
-
-   -- Dynamic window border title based on current mode
    if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
       local titles = {
          files = " Files ",
@@ -251,31 +305,23 @@ function M.render_left()
          title = titles[Ui.mode] or " Files ",
          title_pos = "center",
       })
+      update_active_borders()
    end
 
-   -- 1. Mode: Files (delegates to tree rendering module)
    if Ui.mode == "files" then
       local ok, tree = pcall(require, "gitcompanion.ui.tree")
       if not ok then
          ok, tree = pcall(require, "gitcompanion.tree")
       end
 
-      -- vim.notify(
-      -- 	string.format("[gitcompanion] render_left delegating to tree | module_found: %s", tostring(ok)),
-      -- 	vim.log.levels.DEBUG
-      -- )
-
       if ok and type(tree) == "table" and type(tree.render_files_tree) == "function" then
          tree.render_files_tree()
-      else
-         -- vim.notify("[gitcompanion] render_left: Failed to load tree rendering module", vim.log.levels.ERROR)
       end
 
       M.render_diff()
       return
    end
 
-   -- 2. Mode: Branches / Stashes
    local lines = {}
    local highlights = {}
 
@@ -284,11 +330,6 @@ function M.render_left()
           or Ui.branch_selected
           or "HEAD"
       local branches = Ui.branches or {}
-
-      -- vim.notify(
-      -- 	string.format("[gitcompanion] render_left branches count: %d | current: %s", #branches, tostring(current)),
-      -- 	vim.log.levels.DEBUG
-      -- )
 
       for i, b in ipairs(branches) do
          local marker = (b == current) and "*" or " "
@@ -319,8 +360,6 @@ function M.render_left()
       local stashes = Ui.stashes or {}
       local parsed_stashes = {}
       local max_branch_len = 0
-
-      -- vim.notify(string.format("[gitcompanion] render_left stashes count: %d", #stashes), vim.log.levels.DEBUG)
 
       for _, s in ipairs(stashes) do
          local branch, msg = s:match("^stash@{%d+}:%s*On%s+([^:]+):%s*(.*)$")
@@ -374,9 +413,7 @@ function M.render_left()
       lines = { placeholder }
    end
 
-   -- Write content and set highlights safely
    vim.bo[buf].modifiable = true
-
    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
    vim.api.nvim_buf_clear_namespace(buf, ns_left, 0, -1)
    for _, h in ipairs(highlights) do
@@ -396,12 +433,12 @@ function M.render_right()
    end
 
    vim.api.nvim_set_option_value("modifiable", true, { buf = Ui.right_buf })
+   -- FIX 2: ns_right is now defined at module scope
    vim.api.nvim_buf_clear_namespace(Ui.right_buf, ns_right, 0, -1)
 
    local branch = Ui.branch_selected or "HEAD"
    local raw_out = Ui.commit_graph_cache and Ui.commit_graph_cache[branch]
 
-   -- Normalize raw_out to a table of string lines
    local out = {}
    if type(raw_out) == "string" then
       out = vim.split(raw_out, "\n", { trimempty = true })
@@ -419,16 +456,13 @@ function M.render_right()
       out = { "[No commits]" }
    end
 
-   -- 1. Write lines directly to buffer
    vim.api.nvim_buf_set_lines(Ui.right_buf, 0, -1, false, out)
 
-   -- 2. Apply colors and highlights
    Ui.branch_colors = Ui.branch_colors or {}
    local graph_chars_list = _G.graph_chars or { "*", "|", "/", "\\", "-", " ", "o", "*" }
    local graph_colors = _G.graph_colors or { "#56b6c2", "#e06c75", "#98c379", "#d19a66", "#c678dd" }
 
    for i, line in ipairs(out) do
-      -- 1. Highlight git graph symbols (*, |, \, /)
       for pos = 1, #line do
          local char = line:sub(pos, pos)
          if vim.tbl_contains(graph_chars_list, char) then
@@ -444,7 +478,6 @@ function M.render_right()
       local h_start, _, hash, date, author, msg = line:find("(%x%x%x%x%x%x%x+)%s+(%d%d/%d%d/%d%d)%s+(%S+)%s+(.+)")
 
       if h_start then
-         -- Calculate strict column positions based on regex captures
          local hash_s = h_start - 1
          local hash_e = hash_s + #hash
 
@@ -456,7 +489,6 @@ function M.render_right()
 
          local msg_s = line:find(msg, author_e, true) - 1
 
-         -- Apply clean highlights only to valid commit rows
          vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitHash", i - 1, hash_s, hash_e)
          vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitDate", i - 1, date_s, date_e)
          vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitAuthor", i - 1, author_s, author_e)
@@ -466,15 +498,12 @@ function M.render_right()
 
    vim.api.nvim_set_option_value("modifiable", false, { buf = Ui.right_buf })
 
-   -- 3. Set buffer-local keymap for toggling full screen with '+'
    vim.keymap.set("n", "+", function()
       if Ui.is_maximized and Ui.restore_win_cmd then
-         -- Restore original split dimensions
          vim.cmd(Ui.restore_win_cmd)
          Ui.is_maximized = false
          Ui.restore_win_cmd = nil
       else
-         -- Capture current split layout state before maximizing
          Ui.restore_win_cmd = vim.fn.winrestcmd()
          vim.cmd("wincmd _")
          vim.cmd("wincmd |")
