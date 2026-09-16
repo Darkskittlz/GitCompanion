@@ -196,6 +196,20 @@ function M.attach(buf, state)
 
 	local right_opts = { buffer = right_buf, noremap = true, silent = true }
 
+	-- Bind '+' on right buffer to toggle maximize commit log view
+	vim.keymap.set("n", "+", function()
+		if Ui.is_maximized and Ui.restore_win_cmd then
+			vim.cmd(Ui.restore_win_cmd)
+			Ui.is_maximized = false
+			Ui.restore_win_cmd = nil
+		else
+			Ui.restore_win_cmd = vim.fn.winrestcmd()
+			vim.cmd("wincmd _")
+			vim.cmd("wincmd |")
+			Ui.is_maximized = true
+		end
+	end, vim.tbl_extend("force", right_opts, { desc = "Toggle maximize commit log view" }))
+
 	-- Bind 'g' on right buffer for commit resets
 	vim.keymap.set("n", "g", function()
 		if Ui.mode ~= "branches" then
