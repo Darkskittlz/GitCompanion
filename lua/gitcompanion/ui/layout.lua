@@ -76,27 +76,25 @@ vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
 
 -- 2. HIGHLIGHT GROUP SETUP
 local function setup_border_highlights()
-   local colors = {
-      "#e06c75", -- Red
-      "#d19a66", -- Orange
-      "#e5c07b", -- Yellow
-      "#98c379", -- Green
-      "#56b6c2", -- Cyan
-      "#61afef", -- Blue
-      "#c678dd", -- Purple
-      "#be5046", -- Dark Red
-   }
+   -- Delegate all highlight group applications to config.lua
+   local config = require("gitcompanion.config")
+   config.apply_highlights()
+
+   -- Border Highlights (Rainbow fallbacks)
+   local colors = config.options.graph_colors
+       or {
+          "#e06c75",
+          "#d19a66",
+          "#e5c07b",
+          "#98c379",
+          "#56b6c2",
+          "#61afef",
+          "#c678dd",
+          "#be5046",
+       }
    for i, color in ipairs(colors) do
       vim.api.nvim_set_hl(0, "RainbowBorder" .. i, { fg = color, default = true })
    end
-
-   -- Commit Log & UI Highlights
-   vim.api.nvim_set_hl(0, "GitHash", { fg = "#00d7ff", bold = true, default = true })
-   vim.api.nvim_set_hl(0, "GitDate", { fg = "#db302d", italic = true, default = true })
-   vim.api.nvim_set_hl(0, "GitAuthor", { fg = "#00a77d", italic = true, default = true })
-   vim.api.nvim_set_hl(0, "GitOutput", { fg = "#40a02b", bold = false, italic = false, default = true })
-   vim.api.nvim_set_hl(0, "GitError", { fg = "#FF6F69", bold = false, italic = false, default = true })
-   vim.api.nvim_set_hl(0, "GitMsg", { fg = "#777777", bold = false, italic = false, default = true })
 end
 
 -------------------------------------------------------------------------------
