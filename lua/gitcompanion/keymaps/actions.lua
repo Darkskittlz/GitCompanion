@@ -77,14 +77,31 @@ function M.attach(buf, state)
 										pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { Ui.selected_index, 0 })
 									end
 
-									-- Instantly trigger layout/UI refresh to load commit logs & diffs right away
+									-- Immediately fetch and render commit log data for the new branch
+									local data_mod = package.loaded["gitcompanion.git.data"]
+										or require("gitcompanion.git.data")
+									if data_mod and type(data_mod.load_commits_async) == "function" then
+										data_mod.load_commits_async(target_branch, function(commits)
+											Ui.commit_data_cache = Ui.commit_data_cache or {}
+											Ui.commit_data_cache[target_branch] = commits
+
+											-- Refresh right pane (commit log) view
+											local layout_mod = package.loaded["gitcompanion.ui.layout"]
+												or require("gitcompanion.ui.layout")
+											if layout_mod and type(layout_mod.render_right) == "function" then
+												layout_mod.render_right()
+											end
+										end)
+									end
+
+									-- Trigger layout refresh
 									local layout_mod = package.loaded["gitcompanion.ui.layout"]
 										or require("gitcompanion.ui.layout")
 									if layout_mod and type(layout_mod.refresh_ui) == "function" then
 										layout_mod.refresh_ui()
 									end
 
-									-- Trigger background reload/fetch safely
+									-- Trigger background reload safely
 									local state_mod = require("gitcompanion.state")
 									if type(state_mod.reload_with_fetch) == "function" then
 										state_mod.reload_with_fetch(target_branch, function()
