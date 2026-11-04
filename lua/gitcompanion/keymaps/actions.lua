@@ -42,22 +42,25 @@ function M.attach(buf, state)
                   return
                end
 
-               local current_branch = vim.fn.trim(vim.fn.system("git branch --show-current"))
+               -- Instead of blocking with vim.fn.system, check against cached state or run async
+               local current_branch = Ui.current_branch
+               if not current_branch or current_branch == "" then
+                  current_branch = vim.fn.trim(Ui.branch_selected or "")
+               end
+
                if target_branch == current_branch then
                   vim.notify("Already on branch '" .. target_branch .. "'", vim.log.levels.INFO)
                   return
                end
 
-               -- 2. Execute git checkout
+               -- 2. Execute git checkout asynchronously via jobstart (already non-blocking, but clean)
                vim.fn.jobstart({ "git", "checkout", target_branch }, {
                   on_exit = function(_, exit_code)
                      vim.schedule(function()
                         if exit_code == 0 then
-                           -- Update internal references
                            Ui.branch_selected = target_branch
                            Ui.current_branch = target_branch
 
-                           -- 3. Trigger full state reload & redraw
                            local state_mod = require("gitcompanion.state")
                            state_mod.reload_with_fetch(target_branch, function()
                               if type(sync_selected_index) == "function" then
