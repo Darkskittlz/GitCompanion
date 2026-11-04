@@ -55,15 +55,15 @@ function M.attach(buf, state)
 
 					-- 2. Execute git checkout asynchronously via jobstart
 					is_switching_branch = true
-					vim.notify("[Debug] Starting checkout for target: " .. tostring(target_branch), vim.log.levels.INFO)
+					-- vim.notify("[Debug] Starting checkout for target: " .. tostring(target_branch), vim.log.levels.INFO)
 
 					vim.fn.jobstart({ "git", "checkout", target_branch }, {
 						on_exit = function(_, exit_code)
 							vim.schedule(function()
-								vim.notify(
-									"[Debug] Checkout job exited with code: " .. tostring(exit_code),
-									vim.log.levels.INFO
-								)
+								-- vim.notify(
+								-- 	"[Debug] Checkout job exited with code: " .. tostring(exit_code),
+								-- 	vim.log.levels.INFO
+								-- )
 								if exit_code == 0 then
 									Ui.branch_selected = target_branch
 									Ui.current_branch = target_branch
@@ -71,11 +71,11 @@ function M.attach(buf, state)
 									local state_mod = require("gitcompanion.state")
 									if type(state_mod.reload_with_fetch) == "function" then
 										state_mod.reload_with_fetch(target_branch, function()
-											vim.notify(
-												"[Debug] reload_with_fetch callback executed. Ui.branches count: "
-													.. tostring(Ui.branches and #Ui.branches or "nil"),
-												vim.log.levels.INFO
-											)
+											-- vim.notify(
+											-- 	"[Debug] reload_with_fetch callback executed. Ui.branches count: "
+											-- 		.. tostring(Ui.branches and #Ui.branches or "nil"),
+											-- 	vim.log.levels.INFO
+											-- )
 
 											-- Directly find and lock target_branch index from the fresh list
 											if Ui.branches then
@@ -89,11 +89,11 @@ function M.attach(buf, state)
 												end
 											end
 
-											vim.notify(
-												"[Debug] Target Branch Index Found -> Ui.selected_index: "
-													.. tostring(Ui.selected_index),
-												vim.log.levels.INFO
-											)
+											-- vim.notify(
+											-- 	"[Debug] Target Branch Index Found -> Ui.selected_index: "
+											-- 		.. tostring(Ui.selected_index),
+											-- 	vim.log.levels.INFO
+											-- )
 
 											-- Force cursor adjustment immediately and again after a short tick to beat layout overrides
 											local function snap_cursor()
@@ -107,13 +107,13 @@ function M.attach(buf, state)
 														Ui.left_win,
 														{ Ui.selected_index, 0 }
 													)
-													vim.notify(
-														"[Debug] nvim_win_set_cursor result: "
-															.. tostring(ok)
-															.. " err: "
-															.. tostring(err),
-														vim.log.levels.INFO
-													)
+													-- vim.notify(
+													-- 	"[Debug] nvim_win_set_cursor result: "
+													-- 		.. tostring(ok)
+													-- 		.. " err: "
+													-- 		.. tostring(err),
+													-- 	vim.log.levels.INFO
+													-- )
 												end
 											end
 
@@ -122,10 +122,10 @@ function M.attach(buf, state)
 
 											vim.defer_fn(function()
 												is_switching_branch = false
-												vim.notify(
-													"[Debug] is_switching_branch lock released",
-													vim.log.levels.INFO
-												)
+												-- vim.notify(
+												-- 	"[Debug] is_switching_branch lock released",
+												-- 	vim.log.levels.INFO
+												-- )
 											end, 200)
 										end)
 									else
