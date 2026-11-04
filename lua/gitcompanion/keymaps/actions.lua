@@ -77,12 +77,20 @@ function M.attach(buf, state)
 												vim.log.levels.INFO
 											)
 
-											if type(sync_selected_index) == "function" then
-												sync_selected_index()
+											-- Directly find and lock target_branch index from the fresh list
+											if Ui.branches then
+												for idx, b in ipairs(Ui.branches) do
+													local clean_b = b:gsub("^%*%s*", ""):gsub("%s+$", "")
+													if clean_b == target_branch then
+														Ui.selected_index = idx
+														Ui.branch_selected = target_branch
+														break
+													end
+												end
 											end
 
 											vim.notify(
-												"[Debug] After sync_selected_index -> Ui.selected_index: "
+												"[Debug] Target Branch Index Found -> Ui.selected_index: "
 													.. tostring(Ui.selected_index),
 												vim.log.levels.INFO
 											)
