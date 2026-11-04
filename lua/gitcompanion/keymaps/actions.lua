@@ -73,7 +73,7 @@ function M.attach(buf, state)
 									if type(state_mod.reload_with_fetch) == "function" then
 										state_mod.reload_with_fetch(target_branch, function()
 											vim.notify(
-												"[Debug] reload_with_fetch callback executed. Ui.branches count: "
+												"[Debug] reload_with_fetch callback finished. Total branches: "
 													.. tostring(Ui.branches and #Ui.branches or "nil"),
 												vim.log.levels.INFO
 											)
@@ -84,7 +84,7 @@ function M.attach(buf, state)
 											end
 
 											vim.notify(
-												"[Debug] After sync_selected_index -> Ui.selected_index: "
+												"[Debug] After sync -> Ui.selected_index: "
 													.. tostring(Ui.selected_index),
 												vim.log.levels.INFO
 											)
@@ -100,9 +100,9 @@ function M.attach(buf, state)
 													{ Ui.selected_index, 0 }
 												)
 												vim.notify(
-													"[Debug] nvim_win_set_cursor result: "
+													"[Debug] nvim_win_set_cursor success: "
 														.. tostring(ok)
-														.. " err: "
+														.. " | err: "
 														.. tostring(err),
 													vim.log.levels.INFO
 												)
@@ -122,6 +122,10 @@ function M.attach(buf, state)
 											end, 200)
 										end)
 									else
+										vim.notify(
+											"[Debug] state_mod.reload_with_fetch not a function, running fallback",
+											vim.log.levels.WARN
+										)
 										-- Fallback manual index sync & cursor snap
 										if Ui.branches then
 											for idx, b in ipairs(Ui.branches) do
