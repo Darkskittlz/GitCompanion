@@ -68,50 +68,49 @@ function M.attach(buf, state)
 									Ui.branch_selected = target_branch
 									Ui.current_branch = target_branch
 
-									-- Immediately update local branches list or reload them to match current head
 									local state_mod = require("gitcompanion.state")
 									if type(state_mod.reload_with_fetch) == "function" then
 										state_mod.reload_with_fetch(target_branch, function()
 											vim.notify(
-												"[Debug] reload_with_fetch callback finished. Total branches: "
+												"[Debug] reload_with_fetch callback executed. Ui.branches count: "
 													.. tostring(Ui.branches and #Ui.branches or "nil"),
 												vim.log.levels.INFO
 											)
 
-											-- Once state is reloaded, sync index and force cursor move
 											if type(sync_selected_index) == "function" then
 												sync_selected_index()
 											end
 
 											vim.notify(
-												"[Debug] After sync -> Ui.selected_index: "
+												"[Debug] After sync_selected_index -> Ui.selected_index: "
 													.. tostring(Ui.selected_index),
 												vim.log.levels.INFO
 											)
 
-											if
-												Ui.left_win
-												and vim.api.nvim_win_is_valid(Ui.left_win)
-												and Ui.selected_index
-											then
-												local ok, err = pcall(
-													vim.api.nvim_win_set_cursor,
-													Ui.left_win,
-													{ Ui.selected_index, 0 }
-												)
-												vim.notify(
-													"[Debug] nvim_win_set_cursor success: "
-														.. tostring(ok)
-														.. " | err: "
-														.. tostring(err),
-													vim.log.levels.INFO
-												)
-											else
-												vim.notify(
-													"[Debug] Cursor set skipped: left_win invalid or selected_index nil",
-													vim.log.levels.WARN
-												)
+											-- Force cursor adjustment immediately and again after a short tick to beat layout overrides
+											local function snap_cursor()
+												if
+													Ui.left_win
+													and vim.api.nvim_win_is_valid(Ui.left_win)
+													and Ui.selected_index
+												then
+													local ok, err = pcall(
+														vim.api.nvim_win_set_cursor,
+														Ui.left_win,
+														{ Ui.selected_index, 0 }
+													)
+													vim.notify(
+														"[Debug] nvim_win_set_cursor result: "
+															.. tostring(ok)
+															.. " err: "
+															.. tostring(err),
+														vim.log.levels.INFO
+													)
+												end
 											end
+
+											snap_cursor()
+											vim.defer_fn(snap_cursor, 50) -- Double-tap to override post-render layout shifts
 
 											vim.defer_fn(function()
 												is_switching_branch = false
@@ -122,11 +121,6 @@ function M.attach(buf, state)
 											end, 200)
 										end)
 									else
-										vim.notify(
-											"[Debug] state_mod.reload_with_fetch not a function, running fallback",
-											vim.log.levels.WARN
-										)
-										-- Fallback manual index sync & cursor snap
 										if Ui.branches then
 											for idx, b in ipairs(Ui.branches) do
 												local clean_b = b:gsub("^%*%s*", ""):gsub("%s+$", "")
