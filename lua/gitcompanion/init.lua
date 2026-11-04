@@ -327,6 +327,8 @@ function M.toggle(opts)
       end,
    })
 
+   local debounce_timer = nil
+
    vim.api.nvim_create_autocmd("CursorMoved", {
       group = group,
       buffer = Ui.left_buf,
@@ -339,19 +341,28 @@ function M.toggle(opts)
          local cursor = vim.api.nvim_win_get_cursor(current_ui.left_win)
          current_ui.selected_index = cursor[1]
 
-         if current_ui.mode == "files" or current_ui.mode == "stashes" then
-            if type(render_diff) == "function" then
-               render_diff()
-            end
-         elseif current_ui.mode == "branches" then
-            current_ui.branch_selected = current_ui.branches and current_ui.branches[current_ui.selected_index]
-            if type(render_right) == "function" then
-               render_right()
-            end
-            if type(render_diff) == "function" then
-               render_diff()
-            end
+         -- Debounce expensive UI/diff renders during rapid navigation
+         if debounce_timer then
+            debounce_timer:stop()
+            debounce_timer:close()
+            debounce_timer = nil
          end
+
+         debounce_timer = vim.defer_fn(function()
+            if current_ui.mode == "files" or current_ui.mode == "stashes" then
+               if type(render_diff) == "function" then
+                  render_diff()
+               end
+            elseif current_ui.mode == "branches" then
+               current_ui.branch_selected = current_ui.branches and current_ui.branches[current_ui.selected_index]
+               if type(render_right) == "function" then
+                  render_right()
+               end
+               if type(render_diff) == "function" then
+                  render_diff()
+               end
+            end
+         end, 60) -- 60ms delay prevents spamming renders while holding j/k
       end,
    })
 
