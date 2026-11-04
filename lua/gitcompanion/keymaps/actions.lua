@@ -54,7 +54,8 @@ function M.attach(buf, state)
 					end
 
 					-- 2. Execute git checkout asynchronously via jobstart
-					is_switching_branch = true -- Lock cursor auto-updates during transition
+					-- 2. Execute git checkout asynchronously via jobstart
+					is_switching_branch = true
 					vim.fn.jobstart({ "git", "checkout", target_branch }, {
 						on_exit = function(_, exit_code)
 							vim.schedule(function()
@@ -62,60 +63,51 @@ function M.attach(buf, state)
 									Ui.branch_selected = target_branch
 									Ui.current_branch = target_branch
 
-									-- Find and update selected_index for the new branch in the list
-									if Ui.branches then
-										for idx, b in ipairs(Ui.branches) do
-											local clean_b = b:gsub("^%*%s*", ""):gsub("%s+$", "")
-											if clean_b == target_branch then
-												Ui.selected_index = idx
-												break
-											end
-										end
-									end
-
-									-- Snap cursor directly to the newly checked-out branch line
-									if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) and Ui.selected_index then
-										pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { Ui.selected_index, 0 })
-									end
-
-									-- Immediately fetch and render commit log data for the new branch
-									local data_mod = package.loaded["gitcompanion.git.data"]
-										or require("gitcompanion.git.data")
-									if data_mod and type(data_mod.load_commits_async) == "function" then
-										data_mod.load_commits_async(target_branch, function(commits)
-											Ui.commit_data_cache = Ui.commit_data_cache or {}
-											Ui.commit_data_cache[target_branch] = commits
-
-											-- Refresh right pane (commit log) view
-											local layout_mod = package.loaded["gitcompanion.ui.layout"]
-												or require("gitcompanion.ui.layout")
-											if layout_mod and type(layout_mod.render_right) == "function" then
-												layout_mod.render_right()
-											end
-										end)
-									end
-
-									-- Trigger layout refresh
-									local layout_mod = package.loaded["gitcompanion.ui.layout"]
-										or require("gitcompanion.ui.layout")
-									if layout_mod and type(layout_mod.refresh_ui) == "function" then
-										layout_mod.refresh_ui()
-									end
-
-									-- Trigger background reload safely
+									-- Immediately update local branches list or reload them to match current head
 									local state_mod = require("gitcompanion.state")
 									if type(state_mod.reload_with_fetch) == "function" then
 										state_mod.reload_with_fetch(target_branch, function()
+											-- Once state is reloaded, sync index and force cursor move
 											if type(sync_selected_index) == "function" then
 												sync_selected_index()
 											end
-										end)
-									end
 
-									-- Release the switching lock after everything settles
-									vim.defer_fn(function()
+											if
+												Ui.left_win
+												and vim.api.nvim_win_is_valid(Ui.left_win)
+												and Ui.selected_index
+											then
+												pcall(
+													vim.api.nvim_win_set_cursor,
+													Ui.left_win,
+													{ Ui.selected_index, 0 }
+												)
+											end
+
+											vim.defer_fn(function()
+												is_switching_branch = false
+											end, 200)
+										end)
+									else
+										-- Fallback manual index sync & cursor snap
+										if Ui.branches then
+											for idx, b in ipairs(Ui.branches) do
+												local clean_b = b:gsub("^%*%s*", ""):gsub("%s+$", "")
+												if clean_b == target_branch then
+													Ui.selected_index = idx
+													break
+												end
+											end
+										end
+										if
+											Ui.left_win
+											and vim.api.nvim_win_is_valid(Ui.left_win)
+											and Ui.selected_index
+										then
+											pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { Ui.selected_index, 0 })
+										end
 										is_switching_branch = false
-									end, 200)
+									end
 
 									vim.notify("Switched to branch '" .. target_branch .. "'", vim.log.levels.INFO)
 								else
