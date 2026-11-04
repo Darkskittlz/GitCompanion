@@ -54,6 +54,7 @@ function M.attach(buf, state)
 					end
 
 					-- 2. Execute git checkout asynchronously via jobstart
+					is_switching_branch = true -- Lock cursor auto-updates during transition
 					vim.fn.jobstart({ "git", "checkout", target_branch }, {
 						on_exit = function(_, exit_code)
 							vim.schedule(function()
@@ -111,8 +112,14 @@ function M.attach(buf, state)
 										end)
 									end
 
+									-- Release the switching lock after everything settles
+									vim.defer_fn(function()
+										is_switching_branch = false
+									end, 200)
+
 									vim.notify("Switched to branch '" .. target_branch .. "'", vim.log.levels.INFO)
 								else
+									is_switching_branch = false
 									vim.notify(
 										"Failed to checkout branch '" .. target_branch .. "'",
 										vim.log.levels.ERROR

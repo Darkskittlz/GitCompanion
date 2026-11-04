@@ -328,12 +328,17 @@ function M.toggle(opts)
 	})
 
 	local is_rendering = false
+	local is_switching_branch = false
 	local debounce_timer = vim.loop.new_timer()
 
 	vim.api.nvim_create_autocmd("CursorMoved", {
 		group = group,
 		buffer = Ui.left_buf,
 		callback = function()
+			if is_switching_branch then
+				return
+			end
+
 			local current_ui = get_ui()
 			if not current_ui.left_win or not vim.api.nvim_win_is_valid(current_ui.left_win) then
 				return
@@ -342,12 +347,11 @@ function M.toggle(opts)
 			local cursor = vim.api.nvim_win_get_cursor(current_ui.left_win)
 			current_ui.selected_index = cursor[1]
 
-			-- Debounce with a slightly higher window (120ms) and skip if busy
 			debounce_timer:start(
 				120,
 				0,
 				vim.schedule_wrap(function()
-					if is_rendering then
+					if is_rendering or is_switching_branch then
 						return
 					end
 					if not vim.api.nvim_buf_is_valid(Ui.left_buf) then
@@ -376,6 +380,7 @@ function M.toggle(opts)
 			)
 		end,
 	})
+
 	-- Data Fetching
 	if type(get_changed_files_async) == "function" then
 		-- debug_log("Fetching changed files asynchronously...")
