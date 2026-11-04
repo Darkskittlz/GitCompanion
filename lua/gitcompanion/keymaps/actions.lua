@@ -69,15 +69,9 @@ function M.attach(buf, state)
 									Ui.current_branch = target_branch
 
 									local state_mod = require("gitcompanion.state")
-									if type(state_mod.reload_with_fetch) == "function" then
-										state_mod.reload_with_fetch(target_branch, function()
-											-- vim.notify(
-											-- 	"[Debug] reload_with_fetch callback executed. Ui.branches count: "
-											-- 		.. tostring(Ui.branches and #Ui.branches or "nil"),
-											-- 	vim.log.levels.INFO
-											-- )
-
-											-- Directly find and lock target_branch index from the fresh list
+									if type(state_mod.load_branches_async) == "function" then
+										state_mod.load_branches_async({ fetch = false }, function()
+											-- Directly find and lock target_branch index from the fresh local list
 											if Ui.branches then
 												for idx, b in ipairs(Ui.branches) do
 													local clean_b = b:gsub("^%*%s*", ""):gsub("%s+$", "")
@@ -89,11 +83,22 @@ function M.attach(buf, state)
 												end
 											end
 
-											-- vim.notify(
-											-- 	"[Debug] Target Branch Index Found -> Ui.selected_index: "
-											-- 		.. tostring(Ui.selected_index),
-											-- 	vim.log.levels.INFO
-											-- )
+											-- Locally load commits for the new branch without network blocking
+											local data_mod = package.loaded["gitcompanion.git.data"]
+												or require("gitcompanion.git.data")
+											if data_mod and type(data_mod.load_commits_async) == "function" then
+												data_mod.load_commits_async(target_branch, function(commits)
+													Ui.commit_data_cache = Ui.commit_data_cache or {}
+													Ui.commit_data_cache[target_branch] = commits
+													Ui.current_log_branch = target_branch
+
+													local layout_mod = package.loaded["gitcompanion.ui.layout"]
+														or require("gitcompanion.ui.layout")
+													if layout_mod and type(layout_mod.render_right) == "function" then
+														layout_mod.render_right()
+													end
+												end)
+											end
 
 											-- Force cursor adjustment immediately and again after a short tick to beat layout overrides
 											local function snap_cursor()
@@ -102,50 +107,27 @@ function M.attach(buf, state)
 													and vim.api.nvim_win_is_valid(Ui.left_win)
 													and Ui.selected_index
 												then
-													local ok, err = pcall(
+													pcall(
 														vim.api.nvim_win_set_cursor,
 														Ui.left_win,
 														{ Ui.selected_index, 0 }
 													)
-													-- vim.notify(
-													-- 	"[Debug] nvim_win_set_cursor result: "
-													-- 		.. tostring(ok)
-													-- 		.. " err: "
-													-- 		.. tostring(err),
-													-- 	vim.log.levels.INFO
-													-- )
 												end
 											end
 
 											snap_cursor()
 											vim.defer_fn(snap_cursor, 50) -- Double-tap to override post-render layout shifts
 
+											local layout_mod = package.loaded["gitcompanion.ui.layout"]
+												or require("gitcompanion.ui.layout")
+											if layout_mod and type(layout_mod.refresh_ui) == "function" then
+												layout_mod.refresh_ui({ skip_fetch = true })
+											end
+
 											vim.defer_fn(function()
 												is_switching_branch = false
-												-- vim.notify(
-												-- 	"[Debug] is_switching_branch lock released",
-												-- 	vim.log.levels.INFO
-												-- )
 											end, 200)
 										end)
-									else
-										if Ui.branches then
-											for idx, b in ipairs(Ui.branches) do
-												local clean_b = b:gsub("^%*%s*", ""):gsub("%s+$", "")
-												if clean_b == target_branch then
-													Ui.selected_index = idx
-													break
-												end
-											end
-										end
-										if
-											Ui.left_win
-											and vim.api.nvim_win_is_valid(Ui.left_win)
-											and Ui.selected_index
-										then
-											pcall(vim.api.nvim_win_set_cursor, Ui.left_win, { Ui.selected_index, 0 })
-										end
-										is_switching_branch = false
 									end
 
 									vim.notify("Switched to branch '" .. target_branch .. "'", vim.log.levels.INFO)
