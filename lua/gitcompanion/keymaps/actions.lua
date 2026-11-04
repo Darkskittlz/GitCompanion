@@ -54,11 +54,16 @@ function M.attach(buf, state)
 					end
 
 					-- 2. Execute git checkout asynchronously via jobstart
-					-- 2. Execute git checkout asynchronously via jobstart
 					is_switching_branch = true
+					vim.notify("[Debug] Starting checkout for target: " .. tostring(target_branch), vim.log.levels.INFO)
+
 					vim.fn.jobstart({ "git", "checkout", target_branch }, {
 						on_exit = function(_, exit_code)
 							vim.schedule(function()
+								vim.notify(
+									"[Debug] Checkout job exited with code: " .. tostring(exit_code),
+									vim.log.levels.INFO
+								)
 								if exit_code == 0 then
 									Ui.branch_selected = target_branch
 									Ui.current_branch = target_branch
@@ -67,25 +72,53 @@ function M.attach(buf, state)
 									local state_mod = require("gitcompanion.state")
 									if type(state_mod.reload_with_fetch) == "function" then
 										state_mod.reload_with_fetch(target_branch, function()
+											vim.notify(
+												"[Debug] reload_with_fetch callback executed. Ui.branches count: "
+													.. tostring(Ui.branches and #Ui.branches or "nil"),
+												vim.log.levels.INFO
+											)
+
 											-- Once state is reloaded, sync index and force cursor move
 											if type(sync_selected_index) == "function" then
 												sync_selected_index()
 											end
+
+											vim.notify(
+												"[Debug] After sync_selected_index -> Ui.selected_index: "
+													.. tostring(Ui.selected_index),
+												vim.log.levels.INFO
+											)
 
 											if
 												Ui.left_win
 												and vim.api.nvim_win_is_valid(Ui.left_win)
 												and Ui.selected_index
 											then
-												pcall(
+												local ok, err = pcall(
 													vim.api.nvim_win_set_cursor,
 													Ui.left_win,
 													{ Ui.selected_index, 0 }
+												)
+												vim.notify(
+													"[Debug] nvim_win_set_cursor result: "
+														.. tostring(ok)
+														.. " err: "
+														.. tostring(err),
+													vim.log.levels.INFO
+												)
+											else
+												vim.notify(
+													"[Debug] Cursor set skipped: left_win invalid or selected_index nil",
+													vim.log.levels.WARN
 												)
 											end
 
 											vim.defer_fn(function()
 												is_switching_branch = false
+												vim.notify(
+													"[Debug] is_switching_branch lock released",
+													vim.log.levels.INFO
+												)
 											end, 200)
 										end)
 									else
