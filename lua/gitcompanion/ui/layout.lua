@@ -289,6 +289,10 @@ function M.toggle_mode(direction)
 	-- 2. Update layout and borders for focused window
 	M.update_window_layout()
 
+	if Ui.mode == "branches" then
+		M.render_right()
+	end
+
 	-- 3. Trigger diff population
 	M.render_diff()
 end
@@ -303,7 +307,6 @@ function M.render_left()
 	end
 
 	local buf = Ui.left_buf
-	local ns_left = vim.api.nvim_create_namespace("gitcompanion_left_hl")
 
 	if Ui.left_win and vim.api.nvim_win_is_valid(Ui.left_win) then
 		local titles = {
@@ -448,21 +451,40 @@ function M.render_right()
 	local branch = Ui.branch_selected or "HEAD"
 	local raw_out = Ui.commit_graph_cache and Ui.commit_graph_cache[branch]
 
-	local out = {}
+	local entries = {}
 	if type(raw_out) == "string" then
-		out = vim.split(raw_out, "\n", { trimempty = true })
+		for _, line in ipairs(vim.split(raw_out, "\n", { trimempty = true })) do
+			table.insert(entries, { text = line, spans = {} })
+		end
 	elseif type(raw_out) == "table" and #raw_out > 0 then
-		out = raw_out
+		for _, item in ipairs(raw_out) do
+			if type(item) == "table" then
+				table.insert(entries, {
+					text = item.text or "",
+					spans = type(item.spans) == "table" and item.spans or {},
+				})
+			else
+				table.insert(entries, {
+					text = tostring(item),
+					spans = {},
+				})
+			end
+		end
 	else
-		out = { "[Loading commit graph...]" }
+		entries = { { text = "[Loading commit graph...]", spans = {} } }
 		local fetch_graph = graph.fetch_git_graph_async or (Ui and Ui.fetch_git_graph_async)
 		if type(fetch_graph) == "function" then
 			fetch_graph(branch)
 		end
 	end
 
-	if #out == 0 then
-		out = { "[No commits]" }
+	if #entries == 0 then
+		entries = { { text = "[No commits]", spans = {} } }
+	end
+
+	local out = {}
+	for _, entry in ipairs(entries) do
+		table.insert(out, entry.text)
 	end
 
 	vim.api.nvim_buf_set_lines(Ui.right_buf, 0, -1, false, out)
@@ -478,7 +500,21 @@ function M.render_right()
 
 	Ui.branch_colors = Ui.branch_colors or {}
 
-	for line_idx, line in ipairs(out) do
+	for line_idx, entry in ipairs(entries) do
+		local line = entry.text
+		local row = line_idx - 1
+
+		-- 0. Apply parsed ANSI color spans from git --color=always
+		for _, span in ipairs(entry.spans) do
+			local start_col, end_col, hl_group = span[1], span[2], span[3]
+			if hl_group and type(start_col) == "number" and type(end_col) == "number" and end_col > start_col then
+				pcall(vim.api.nvim_buf_set_extmark, Ui.right_buf, ns_right, row, start_col, {
+					end_col = end_col,
+					hl_group = hl_group,
+				})
+			end
+		end
+
 		-- 1. Highlight Graph Symbols (* | / \ - o)
 		local byte_pos = 1
 		for char in line:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
@@ -493,7 +529,7 @@ function M.render_right()
 					Ui.right_buf,
 					ns_right,
 					"GitGraphSymbol" .. byte_pos,
-					line_idx - 1,
+					row,
 					byte_pos - 1,
 					byte_pos - 1 + char_bytes
 				)
@@ -505,29 +541,22 @@ function M.render_right()
 		-- Find 7+ char hex hash
 		local h_start, h_end = line:find("%x%x%x%x%x%x%x+")
 		if h_start then
-			vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitHash", line_idx - 1, h_start - 1, h_end)
+			vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitHash", row, h_start - 1, h_end)
 
 			-- Find date mm/dd/yy after hash
 			local d_start, d_end = line:find("%d%d/%d%d/%d%d", h_end + 1)
 			if d_start then
-				vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitDate", line_idx - 1, d_start - 1, d_end)
+				vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitDate", row, d_start - 1, d_end)
 
 				-- Find author (first non-whitespace word after date)
-				local a_start, a_end, author = line:find("(%S+)", d_end + 1)
+				local a_start, a_end = line:find("(%S+)", d_end + 1)
 				if a_start then
-					vim.api.nvim_buf_add_highlight(
-						Ui.right_buf,
-						ns_right,
-						"GitAuthor",
-						line_idx - 1,
-						a_start - 1,
-						a_end
-					)
+					vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitAuthor", row, a_start - 1, a_end)
 
 					-- Rest of line is commit message
 					local m_start = line:find("%S", a_end + 1)
 					if m_start then
-						vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitMsg", line_idx - 1, m_start - 1, -1)
+						vim.api.nvim_buf_add_highlight(Ui.right_buf, ns_right, "GitMsg", row, m_start - 1, -1)
 					end
 				end
 			end
@@ -579,6 +608,66 @@ function M.get_selected_commit_hash()
 	-- Extract 7-40 character git hash (e.g., matching "01c7c24")
 	local hash = line_text:match("(%x%x%x%x%x%x%x+)")
 	return hash
+end
+
+local function is_patch_lines(lines)
+	if type(lines) ~= "table" or #lines == 0 then
+		return false
+	end
+	for _, line in ipairs(lines) do
+		if type(line) == "string" then
+			if
+				line:match("^diff %-%-git ")
+				or line:match("^@@ ")
+				or line:match("^%+%+%+ ")
+				or line:match("^%-%-%- ")
+			then
+				return true
+			end
+		end
+	end
+	return false
+end
+
+local function apply_fallback_diff_highlights(buf, lines)
+	vim.api.nvim_buf_clear_namespace(buf, ns_diff, 0, -1)
+
+	for idx, line in ipairs(lines) do
+		local row = idx - 1
+		if type(line) == "string" then
+			if
+				line:match("^%[.*%]$")
+				or line:match("^No commit")
+				or line:match("^No stashes")
+				or line:match("^%-%-%- ")
+			then
+				vim.api.nvim_buf_set_extmark(buf, ns_diff, row, 0, {
+					end_row = row + 1,
+					hl_group = "Comment",
+				})
+			elseif line:match("^diff %-%-git ") or line:match("^%+%+%+ ") or line:match("^%-%-%- ") then
+				vim.api.nvim_buf_set_extmark(buf, ns_diff, row, 0, {
+					end_row = row + 1,
+					hl_group = "Title",
+				})
+			elseif line:match("^@@ ") then
+				vim.api.nvim_buf_set_extmark(buf, ns_diff, row, 0, {
+					end_row = row + 1,
+					hl_group = "DiagnosticHint",
+				})
+			elseif line:match("^%+") then
+				vim.api.nvim_buf_set_extmark(buf, ns_diff, row, 0, {
+					end_row = row + 1,
+					hl_group = "DiffAdd",
+				})
+			elseif line:match("^%-") then
+				vim.api.nvim_buf_set_extmark(buf, ns_diff, row, 0, {
+					end_row = row + 1,
+					hl_group = "DiffDelete",
+				})
+			end
+		end
+	end
 end
 
 function M.render_diff()
@@ -638,7 +727,6 @@ function M.render_diff()
 		if #stashes == 0 then
 			lines = { "No stashes available." }
 		else
-			-- Calculate zero-indexed stash reference from line position
 			local stash_index = math.max(0, cursor_line - 1)
 			local stash_ref = string.format("stash@{%d}", stash_index)
 
@@ -649,7 +737,6 @@ function M.render_diff()
 				if type(diff_mod.fetch_stash_diff_async) == "function" then
 					diff_mod.fetch_stash_diff_async(stash_ref)
 				else
-					-- Fallback if async loader isn't attached yet
 					local out = vim.fn.systemlist("git stash show -p " .. stash_ref)
 					lines = (#out > 0) and out or { "  (Empty stash diff)" }
 					ui.diff_cache[stash_ref] = lines
@@ -658,16 +745,31 @@ function M.render_diff()
 		end
 	end
 
-	if lines then
-		vim.bo[ui.diff_buf].modifiable = true
-		vim.api.nvim_buf_set_lines(ui.diff_buf, 0, -1, false, lines)
-		vim.bo[ui.diff_buf].modifiable = false
-		vim.bo[ui.diff_buf].modified = false
-
-		-- Activate syntax highlighting
-		vim.bo[ui.diff_buf].filetype = "diff"
-		vim.bo[ui.diff_buf].syntax = "diff"
+	if not lines then
+		return
 	end
+
+	vim.api.nvim_buf_clear_namespace(ui.diff_buf, ns_diff, 0, -1)
+
+	if is_patch_lines(lines) then
+		local ok, snacks_diff = pcall(require, "snacks.picker.util.diff")
+		if ok and type(snacks_diff.render) == "function" then
+			local rendered_ok = pcall(snacks_diff.render, ui.diff_buf, ns_diff, lines, {})
+			if rendered_ok then
+				vim.bo[ui.diff_buf].modified = false
+				return
+			end
+		end
+	end
+
+	vim.bo[ui.diff_buf].modifiable = true
+	vim.api.nvim_buf_set_lines(ui.diff_buf, 0, -1, false, lines)
+	vim.bo[ui.diff_buf].modifiable = false
+	vim.bo[ui.diff_buf].modified = false
+	vim.bo[ui.diff_buf].filetype = "diff"
+	vim.bo[ui.diff_buf].syntax = "diff"
+
+	apply_fallback_diff_highlights(ui.diff_buf, lines)
 end
 
 -------------------------------------------------------------------------------
