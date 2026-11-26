@@ -144,6 +144,36 @@ local function on_commit_success(state)
    end
 end
 
+local ns_commit_diff = vim.api.nvim_create_namespace("gitcompanion_commit_diff")
+
+local function render_staged_diff(buf, diff_lines)
+   if not buf or not vim.api.nvim_buf_is_valid(buf) then
+      return
+   end
+
+   vim.api.nvim_buf_clear_namespace(buf, ns_commit_diff, 0, -1)
+
+   local has_patch = type(diff_lines) == "table" and #diff_lines > 0 and diff_lines[1] ~= "[No staged changes]"
+   if has_patch then
+      local ok, snacks_diff = pcall(require, "snacks.picker.util.diff")
+      if ok and type(snacks_diff.render) == "function" then
+         vim.bo[buf].modifiable = true
+         local rendered_ok = pcall(snacks_diff.render, buf, ns_commit_diff, diff_lines, {})
+         vim.bo[buf].modifiable = false
+         vim.bo[buf].modified = false
+         if rendered_ok then
+            return
+         end
+      end
+   end
+
+   vim.bo[buf].modifiable = true
+   vim.bo[buf].filetype = "diff"
+   vim.api.nvim_buf_set_lines(buf, 0, -1, false, diff_lines or { "[No staged changes]" })
+   vim.bo[buf].modifiable = false
+   vim.bo[buf].modified = false
+end
+
 function M.open_commit_modal(state)
    local Ui = state.Ui or state
    local branch = (Ui.branches and Ui.branches[Ui.selected_index]) or Ui.branch_selected or "HEAD"
@@ -173,14 +203,12 @@ function M.open_commit_modal(state)
    local buf_diff = vim.api.nvim_create_buf(false, true)
    vim.bo[buf_diff].buftype = "nofile"
    vim.bo[buf_diff].bufhidden = "wipe"
-   vim.bo[buf_diff].filetype = "diff"
 
    local diff_lines = vim.fn.systemlist("git diff --cached")
    if vim.v.shell_error ~= 0 or #diff_lines == 0 then
       diff_lines = { "[No staged changes]" }
    end
-   vim.api.nvim_buf_set_lines(buf_diff, 0, -1, false, diff_lines)
-   vim.bo[buf_diff].modifiable = false
+   render_staged_diff(buf_diff, diff_lines)
 
    local win_diff = vim.api.nvim_open_win(buf_diff, false, {
       relative = "editor",
@@ -273,11 +301,12 @@ function M.open_commit_modal(state)
       end
 
       close_commit_popup()
-      on_commit_success(state)
 
       local ok, commits_keymaps = pcall(require, "gitcompanion.keymaps.commits")
       if ok and type(commits_keymaps.on_commit_success) == "function" then
          commits_keymaps.on_commit_success(state)
+      elseif type(on_commit_success) == "function" then
+         on_commit_success(state)
       end
    end
 

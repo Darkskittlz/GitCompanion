@@ -289,6 +289,8 @@ function M.toggle_mode(direction)
 	-- 2. Update layout and borders for focused window
 	M.update_window_layout()
 
+	-- test
+
 	if Ui.mode == "branches" then
 		M.render_right()
 	end
